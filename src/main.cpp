@@ -4,12 +4,16 @@
 #include <GxEPD2_7C.h>
 #include <epd7c/GxEPD2_730c_ACeP_730.h>
 
-#define CS_PIN    10
-#define DC_PIN    8
-#define RST_PIN   9
-#define BUSY_PIN  14
-#define SCK_PIN   12
-#define MOSI_PIN  11
+// EE04 (XIAO ESP32-S3) pin mapping via 50-pin connector
+#define CS_PIN    44
+#define DC_PIN    10
+#define RST_PIN   38
+#define BUSY_PIN  4
+
+#define SCK_PIN   7
+#define MOSI_PIN  9
+
+#define KEY1_PIN  2
 
 #ifndef MAX_DISPLAY_BUFFER_SIZE
 #define MAX_DISPLAY_BUFFER_SIZE 65536ul
@@ -154,6 +158,8 @@ void setup()
   Serial.begin(115200);
   delay(2000);
 
+  pinMode(KEY1_PIN, INPUT_PULLUP);
+
   Serial.println("\n===== START RAW =====");
 
   if (!LittleFS.begin(true))
@@ -181,7 +187,15 @@ void setup()
 
 void loop()
 {
-  if (Serial.available())
+  if (digitalRead(KEY1_PIN) == LOW)
+  {
+    delay(50);
+    while (digitalRead(KEY1_PIN) == LOW)
+      delay(10);
+    clearToWhite();
+  }
+
+  if (Serial.available() > 0)
   {
     int c = Serial.read();
 

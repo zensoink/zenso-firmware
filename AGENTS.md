@@ -1,9 +1,9 @@
 # Zenso Firmware - Agent Guidelines & Repository Standards
 
 ## Project Overview
-Zenso Display Firmware — ESP32-S3 + Waveshare 7.3" ACeP e-Paper HAT (Model F) integration with GxEPD2 library.
-- **Board:** ESP32-S3-DevKitC-1 (8MB Flash, 320KB RAM)
-- **Display:** Waveshare 7.3" ACeP (7-color e-paper, 800×480 px, ACeP_730)
+Zenso Display Firmware — XIAO ESP32-S3 (via Seeed EE04 baseboard) + Waveshare 7.3" ACeP e-Paper HAT (Model F) integration with GxEPD2 library.
+- **Board:** Seeed Studio XIAO ESP32-S3 (on EE04 baseboard, 8MB Flash, 8MB PSRAM)
+- **Display:** Waveshare 7.3" ACeP (7-color e-paper, 800×480 px, ACeP_730) via 50-pin FPC
 - **Library:** GxEPD2 (maintained, open-source)
 - **Communication:** 4-line SPI interface
 
@@ -11,33 +11,32 @@ Zenso Display Firmware — ESP32-S3 + Waveshare 7.3" ACeP e-Paper HAT (Model F) 
 
 ## Hardware Setup
 
-### Wiring Reference (Dupont M-M Cables)
-| HAT Pin | Color | ESP32-S3 GPIO | Function |
-|---------|-------|---------------|----------|
-| VCC | Gray | 3V3 | Power 3.3V |
-| GND | Brown | GND | Ground (×2 minimum) |
-| DIN | Blue | GPIO 11 | MOSI (SPI) |
-| SCLK | Yellow | GPIO 12 | Clock (SPI) |
-| CS | Orange | GPIO 10 | Chip Select |
-| DC | Dark Green | GPIO 8 | Data/Command |
-| RST | White | GPIO 9 | Reset |
-| BUSY | Purple | GPIO 14 | Busy Status |
+### EE04 Pin Reference (XIAO ESP32-S3 → 7.3" ACeP via 50-pin FPC)
+The display connects directly to the EE04 baseboard via the 50-pin FPC connector (jumper set to **50-Pin**). No external wiring is needed.
+
+| Display Signal | XIAO GPIO | XIAO Pin Label |
+|----------------|-----------|----------------|
+| MOSI (SPI) | GPIO9 | D10 |
+| SCLK (SPI) | GPIO7 | D8 |
+| CS | GPIO44 | D7 (RX) |
+| DC | GPIO10 | — (Plus pad) |
+| RST | GPIO38 | — (Plus pad) |
+| BUSY | GPIO4 | D3 |
 
 ### SPI Configuration
-- **Mode:** 4-line SPI (standard, recommended)
+- **Mode:** 4-line SPI
 - **Speed:** 115200 baud (configurable via display.init())
-- **Hat Switch:** Set to position 0 (4-line SPI)
-- **Power:** 3.3V from ESP32 (sufficient for HAT + display)
+- **Power:** 3.3V from XIAO (supplied by EE04 baseboard)
 
 ### Pin Definitions (src/main.cpp)
 ```cpp
-#define CS_PIN    10
-#define DC_PIN    8
-#define RST_PIN   9
-#define BUSY_PIN  14
+#define CS_PIN    44
+#define DC_PIN    10
+#define RST_PIN   38
+#define BUSY_PIN  4
 
-#define SCK_PIN   12
-#define MOSI_PIN  11
+#define SCK_PIN   7
+#define MOSI_PIN  9
 ```
 
 ---
@@ -62,7 +61,7 @@ Zenso Display Firmware — ESP32-S3 + Waveshare 7.3" ACeP e-Paper HAT (Model F) 
 - **Rebuild All:** `pio run -t clean && pio run`
 
 ### Configuration
-- **Board:** `esp32-s3-devkitc-1`
+- **Board:** `seeed_xiao_esp32s3`
 - **Platform:** `espressif32`
 - **Framework:** `arduino`
 - **Upload Speed:** `921600` baud
@@ -70,22 +69,22 @@ Zenso Display Firmware — ESP32-S3 + Waveshare 7.3" ACeP e-Paper HAT (Model F) 
 
 ### PlatformIO Configuration (platformio.ini)
 ```ini
-[env:esp32-s3-devkitc-1]
+[env:seeed_xiao_esp32s3]
 platform = espressif32
-board = esp32-s3-devkitc-1
+board = seeed_xiao_esp32s3
 framework = arduino
-board_upload.flash_size = 16MB
-board_build.partitions = default_16MB.csv
-board_build.arduino.memory_type = qio_opi
+
+board_build.filesystem = littlefs
+
 monitor_speed = 115200
 upload_speed = 921600
+
 build_flags = 
-    -DBOARD_HAS_PSRAM
-    -mfix-esp32-psram-cache-issue
-    -DCORE_DEBUG_LEVEL=5
+    -DCORE_DEBUG_LEVEL=1
+
 lib_deps =
     adafruit/Adafruit NeoPixel @ ^1.12.0
-    ZinggJM/GxEPD2 @ ^1.6.5
+    ZinggJM/GxEPD2 @ ^1.6.8
 ```
 
 ---
@@ -220,5 +219,5 @@ do {
 
 ---
 
-**Last Updated:** 2026-01-02
+**Last Updated:** 2026-05-22
 **Maintainer:** Konrad Stępiń (@konradstepien)

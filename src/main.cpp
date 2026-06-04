@@ -3,17 +3,12 @@
 #include <LittleFS.h>
 #include <GxEPD2_7C.h>
 #include <epd7c/GxEPD2_730c_ACeP_730.h>
+#include "config.h"
+#include "pins.h"
+#include "version.h"
+#include "wifi_manager.h"
 
-// EE04 (XIAO ESP32-S3) pin mapping via 50-pin connector
-#define CS_PIN    44
-#define DC_PIN    10
-#define RST_PIN   38
-#define BUSY_PIN  4
-
-#define SCK_PIN   7
-#define MOSI_PIN  9
-
-#define KEY1_PIN  2
+// Pin definitions moved to include/pins.h
 
 #ifndef MAX_DISPLAY_BUFFER_SIZE
 #define MAX_DISPLAY_BUFFER_SIZE 65536ul
@@ -169,6 +164,36 @@ void setup()
   }
 
   Serial.println("LittleFS OK");
+
+  DeviceConfig cfg;
+  config_load(cfg);
+
+  // KEY1 hold detection — force provisioning if held for 3s
+  bool force_provisioning = false;
+  if (digitalRead(KEY1_PIN) == LOW) {
+    uint32_t press_start = millis();
+    force_provisioning = true;
+    while (millis() - press_start < 3000) {
+      delay(100);
+      if (digitalRead(KEY1_PIN) != LOW) {
+        force_provisioning = false;
+        break;
+      }
+    }
+  }
+
+  if (force_provisioning) {
+    Serial.println("Setup: KEY1 held — forcing provisioning mode");
+    wifi_start_provisioning(cfg);
+  } else if (!config_is_provisioned(cfg)) {
+    Serial.println("Setup: no config found — starting provisioning mode");
+    wifi_start_provisioning(cfg);
+  } else if (!wifi_connect(cfg)) {
+    Serial.println("Setup: WiFi connection failed — starting provisioning mode");
+    wifi_start_provisioning(cfg);
+  }
+
+  Serial.println("Setup: WiFi connected, continuing...");
 
   SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
 

@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 
+void provisioning_screen_init();
 void provisioning_screen_draw(
   const String &ap_ssid,
   const String &ap_password,

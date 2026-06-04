@@ -17,17 +17,19 @@
 
 extern GxEPD2_7C<GxEPD2_730c_ACeP_730, MAX_HEIGHT_7C(GxEPD2_730c_ACeP_730)> display;
 
+void provisioning_screen_init() {
+  SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
+  display.init(115200, true, 2, false);
+  display.setRotation(0);
+  display.setFullWindow();
+}
+
 void provisioning_screen_draw(
   const String &ap_ssid,
   const String &ap_password,
   const String &ap_url,
   const String &firmware_version)
 {
-  SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
-  display.init(115200, true, 2, false);
-  display.setRotation(0);
-  display.setFullWindow();
-
   display.firstPage();
   do {
     display.fillScreen(GxEPD_WHITE);
@@ -75,7 +77,7 @@ void provisioning_screen_draw(
     // Line 3: AP SSID
     display.setCursor(300, 170);
     display.setTextSize(2);
-    display.print("   ");
+    display.print("   SSID: ");
     display.print(ap_ssid);
 
     // Line 4: Password

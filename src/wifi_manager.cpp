@@ -24,8 +24,7 @@ static const char PROVISIONING_HTML[] PROGMEM = R"rawliteral(
 <body>
 <h2>Zenso Configuration</h2>
 <form method="POST" action="/save">
-  <label>WiFi SSID<input name="ssid" type="text"></label>
-  <small style="color:#666">Use a 2.4 GHz network (5 GHz not supported)</small>
+  <label>WiFi SSID/Name<input name="ssid" type="text"></label>
   <label>Password<input name="password" type="password"></label>
   <label>API URL<input name="api_url" type="text" placeholder="http://192.168.1.x:3000"></label>
   <button type="submit">Save & Restart</button>
@@ -64,6 +63,8 @@ static String provisioning_generate_password() {
 bool wifi_connect(const DeviceConfig &cfg, uint32_t timeout_ms) {
   Serial.printf("WiFi: connecting to %s...\n", cfg.ssid.c_str());
 
+  WiFi.disconnect(false, false);
+  delay(100);
   WiFi.mode(WIFI_STA);
   WiFi.begin(cfg.ssid.c_str(), cfg.password.c_str());
 
@@ -160,6 +161,8 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
 
   server.begin();
   Serial.println("Provisioning: HTTP server started on port 80");
+
+  provisioning_screen_init();
 
   provisioning_screen_draw(
     "Zenso-Setup",

@@ -4,212 +4,118 @@
 #include <GxEPD2_7C.h>
 #include <epd7c/GxEPD2_730c_ACeP_730.h>
 
-#define CS_PIN    10
-#define DC_PIN    8
-#define RST_PIN   9
-#define BUSY_PIN  14
-#define SCK_PIN   12
-#define MOSI_PIN  11
+// EE04 (XIAO ESP32-S3) pin mapping via 50-pin connector
+#define CS_PIN    44
+#define DC_PIN    10
+#define RST_PIN   38
+#define BUSY_PIN  4
 
-GxEPD2_7C<GxEPD2_730c_ACeP_730, 20> display(
+#define SCK_PIN   7
+#define MOSI_PIN  9
+
+#define KEY1_PIN  2
+
+#ifndef MAX_DISPLAY_BUFFER_SIZE
+#define MAX_DISPLAY_BUFFER_SIZE 65536ul
+#endif
+
+#ifndef MAX_HEIGHT_7C
+#define MAX_HEIGHT_7C(EPD) ((EPD::HEIGHT <= (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 2)) ? \
+                            EPD::HEIGHT : (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 2))
+#endif
+
+GxEPD2_7C<GxEPD2_730c_ACeP_730, MAX_HEIGHT_7C(GxEPD2_730c_ACeP_730)> display(
   GxEPD2_730c_ACeP_730(CS_PIN, DC_PIN, RST_PIN, BUSY_PIN)
 );
 
-uint16_t read16(File &f)
-{
-  uint8_t b0 = f.read();
-  uint8_t b1 = f.read();
-  return (uint16_t)b0 | ((uint16_t)b1 << 8);
-}
-
-uint32_t read32(File &f)
-{
-  uint8_t b0 = f.read();
-  uint8_t b1 = f.read();
-  uint8_t b2 = f.read();
-  uint8_t b3 = f.read();
-  return (uint32_t)b0 | ((uint32_t)b1 << 8) | ((uint32_t)b2 << 16) | ((uint32_t)b3 << 24);
-}
-
-int32_t readS32(File &f)
-{
-  return (int32_t)read32(f);
-}
-
-struct RGB
-{
-  uint8_t r, g, b;
+static const uint16_t epdPalette[7] = {
+  GxEPD_BLACK,
+  GxEPD_WHITE,
+  GxEPD_GREEN,
+  GxEPD_BLUE,
+  GxEPD_RED,
+  GxEPD_YELLOW,
+  GxEPD_ORANGE
 };
 
-uint16_t mapRgbToEinkColor(uint8_t r, uint8_t g, uint8_t b)
+bool drawRAW(const char *filename)
 {
-  struct RefColor
+  File rawFile = LittleFS.open(filename, "r");
+  if (!rawFile)
   {
-    uint8_t r, g, b;
-    uint16_t epd;
-    const char* name;
-  };
-
-  static const RefColor refs[] = {
-    {255, 255, 255, GxEPD_WHITE,  "WHITE"},
-    {  0,   0,   0, GxEPD_BLACK,  "BLACK"},
-    {  0, 255,   0, GxEPD_GREEN,  "GREEN"},
-    {  0,   0, 255, GxEPD_BLUE,   "BLUE"},
-    {255,   0,   0, GxEPD_RED,    "RED"},
-    {255, 255,   0, GxEPD_YELLOW, "YELLOW"},
-    {255, 128,   0, GxEPD_ORANGE, "ORANGE"}
-  };
-
-  uint32_t bestDist = 0xFFFFFFFF;
-  uint16_t bestColor = GxEPD_WHITE;
-
-  for (auto &c : refs)
-  {
-    int32_t dr = (int32_t)r - c.r;
-    int32_t dg = (int32_t)g - c.g;
-    int32_t db = (int32_t)b - c.b;
-    uint32_t dist = dr * dr + dg * dg + db * db;
-
-    if (dist < bestDist)
-    {
-      bestDist = dist;
-      bestColor = c.epd;
-    }
-  }
-
-  return bestColor;
-}
-
-bool drawBMP(const char *filename)
-{
-  File bmpFile = LittleFS.open(filename, "r");
-  if (!bmpFile)
-  {
-    Serial.println("BŁĄD: Nie można otworzyć pliku BMP");
+    Serial.println("BŁĄD: Nie można otworzyć pliku RAW");
     return false;
   }
 
-  if (read16(bmpFile) != 0x4D42)
+  const int16_t w = display.width();
+  const int16_t h = display.height();
+  const uint32_t rowSize = (w + 1) / 2;
+  const uint32_t expectedSize = rowSize * h;
+
+  size_t fileSize = rawFile.size();
+  Serial.printf("RAW: plik=%s, size=%u, expected=%lu, ekran=%dx%d\n",
+                filename, (unsigned)fileSize, (unsigned long)expectedSize, w, h);
+
+  if (fileSize != expectedSize)
   {
-    Serial.println("BŁĄD: To nie jest BMP");
-    bmpFile.close();
+    Serial.println("BŁĄD: Niepoprawny rozmiar pliku RAW");
+    rawFile.close();
     return false;
   }
 
-  uint32_t fileSize   = read32(bmpFile);
-  (void)fileSize;
-  read32(bmpFile);
-  uint32_t dataOffset = read32(bmpFile);
-
-  uint32_t dibSize    = read32(bmpFile);
-  int32_t width       = readS32(bmpFile);
-  int32_t height      = readS32(bmpFile);
-  uint16_t planes     = read16(bmpFile);
-  uint16_t bitCount   = read16(bmpFile);
-  uint32_t compression= read32(bmpFile);
-
-  if (planes != 1)
+  uint8_t *rowBuffer = (uint8_t *)malloc(rowSize);
+  if (!rowBuffer)
   {
-    Serial.println("BŁĄD: Niepoprawne BMP planes");
-    bmpFile.close();
+    Serial.println("BŁĄD: Brak pamięci na rowBuffer");
+    rawFile.close();
     return false;
   }
 
-  if (bitCount != 4 || compression != 0)
-  {
-    Serial.println("BŁĄD: Obsługiwany tylko 4bpp BMP bez kompresji");
-    bmpFile.close();
-    return false;
-  }
+  uint32_t colorCount[16] = {0};
 
-  bool topDown = false;
-  int32_t bmpHeight = height;
-  if (height < 0)
-  {
-    topDown = true;
-    bmpHeight = -height;
-  }
-
-  if (width != display.width() || bmpHeight != display.height())
-  {
-    Serial.printf("UWAGA: BMP ma %ldx%ld, ekran ma %d x %d\n",
-                  (long)width, (long)bmpHeight, display.width(), display.height());
-  }
-
-  uint32_t colorsInPalette = 16;
-  if (dibSize >= 40)
-  {
-    bmpFile.seek(46);
-    uint32_t clrUsed = read32(bmpFile);
-    if (clrUsed > 0 && clrUsed <= 16) colorsInPalette = clrUsed;
-  }
-
-  bmpFile.seek(14 + dibSize);
-
-  RGB palette[16];
-  uint16_t epdPalette[16];
-
-  for (uint32_t i = 0; i < 16; i++)
-  {
-    palette[i] = {0, 0, 0};
-    epdPalette[i] = GxEPD_WHITE;
-  }
-
-  for (uint32_t i = 0; i < colorsInPalette; i++)
-  {
-    uint8_t b = bmpFile.read();
-    uint8_t g = bmpFile.read();
-    uint8_t r = bmpFile.read();
-    bmpFile.read();
-
-    palette[i] = {r, g, b};
-    epdPalette[i] = mapRgbToEinkColor(r, g, b);
-
-    Serial.printf("Pal[%lu] RGB=(%u,%u,%u)\n", (unsigned long)i, r, g, b);
-  }
-
-  uint32_t rowSize = ((width * bitCount + 31) / 32) * 4;
-  uint8_t rowBuffer[rowSize];
-
+  display.setRotation(0);
   display.setFullWindow();
+
   display.firstPage();
   do
   {
     display.fillScreen(GxEPD_WHITE);
 
-    for (int32_t y = 0; y < bmpHeight; y++)
+    if (!rawFile.seek(0))
     {
-      uint32_t rowIndex = topDown ? y : (bmpHeight - 1 - y);
-      uint32_t pos = dataOffset + rowIndex * rowSize;
+      Serial.println("BŁĄD: seek(0) nieudany");
+      free(rowBuffer);
+      rawFile.close();
+      return false;
+    }
 
-      if (!bmpFile.seek(pos))
-      {
-        Serial.printf("BŁĄD seek row %ld\n", (long)y);
-        bmpFile.close();
-        return false;
-      }
-
-      size_t n = bmpFile.read(rowBuffer, rowSize);
+    for (int16_t y = 0; y < h; y++)
+    {
+      size_t n = rawFile.read(rowBuffer, rowSize);
       if (n != rowSize)
       {
-        Serial.printf("BŁĄD read row %ld\n", (long)y);
-        bmpFile.close();
+        Serial.printf("BŁĄD: read row=%d got=%u expected=%lu\n",
+                      y, (unsigned)n, (unsigned long)rowSize);
+        free(rowBuffer);
+        rawFile.close();
         return false;
       }
 
-      int32_t x = 0;
-      for (uint32_t i = 0; i < rowSize && x < width; i++)
+      int16_t x = 0;
+      for (uint32_t i = 0; i < rowSize && x < w; i++)
       {
-        uint8_t v = rowBuffer[i];
-        uint8_t hi = (v >> 4) & 0x0F;
-        uint8_t lo = v & 0x0F;
+        uint8_t val = rowBuffer[i];
+        uint8_t pixel1 = (val >> 4) & 0x0F;
+        uint8_t pixel2 = val & 0x0F;
 
-        display.drawPixel(x, y, epdPalette[hi]);
+        colorCount[pixel1]++;
+        display.drawPixel(x, y, (pixel1 < 7) ? epdPalette[pixel1] : GxEPD_WHITE);
         x++;
 
-        if (x < width)
+        if (x < w)
         {
-          display.drawPixel(x, y, epdPalette[lo]);
+          colorCount[pixel2]++;
+          display.drawPixel(x, y, (pixel2 < 7) ? epdPalette[pixel2] : GxEPD_WHITE);
           x++;
         }
       }
@@ -217,14 +123,23 @@ bool drawBMP(const char *filename)
   }
   while (display.nextPage());
 
-  bmpFile.close();
-  Serial.println("BMP wyrenderowany poprawnie");
+  for (int i = 0; i < 16; i++)
+  {
+    Serial.printf("IDX %d count=%lu\n", i, (unsigned long)colorCount[i]);
+  }
+
+  free(rowBuffer);
+  rawFile.close();
+  Serial.println("RAW wyrenderowany");
   return true;
 }
 
 void clearToWhite()
 {
-  display.init(115200, true, 50, false);
+  Serial.println("Czyszczenie ekranu...");
+
+  display.init(115200, true, 2, false);
+  display.setRotation(0);
   display.setFullWindow();
 
   display.firstPage();
@@ -241,25 +156,29 @@ void clearToWhite()
 void setup()
 {
   Serial.begin(115200);
-  delay(3000);
+  delay(2000);
 
-  Serial.println("\n===== START =====");
+  pinMode(KEY1_PIN, INPUT_PULLUP);
+
+  Serial.println("\n===== START RAW =====");
 
   if (!LittleFS.begin(true))
   {
-    Serial.println("BŁĄD: LittleFS");
+    Serial.println("BŁĄD LittleFS");
     return;
   }
 
+  Serial.println("LittleFS OK");
+
   SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
 
-  display.init(115200, true, 50, false);
+  display.init(115200, true, 2, false);
   display.setRotation(0);
   display.setFullWindow();
 
-  if (!drawBMP("/display.bmp"))
+  if (!drawRAW("/display.raw"))
   {
-    Serial.println("Render BMP nieudany");
+    Serial.println("Render RAW nieudany");
   }
 
   display.powerOff();
@@ -268,7 +187,15 @@ void setup()
 
 void loop()
 {
-  if (Serial.available())
+  if (digitalRead(KEY1_PIN) == LOW)
+  {
+    delay(50);
+    while (digitalRead(KEY1_PIN) == LOW)
+      delay(10);
+    clearToWhite();
+  }
+
+  if (Serial.available() > 0)
   {
     int c = Serial.read();
 
@@ -278,8 +205,9 @@ void loop()
     }
     else if (c == 'r' || c == 'R')
     {
-      display.init(115200, true, 50, false);
-      drawBMP("/display.bmp");
+      Serial.println("Ponowne renderowanie RAW...");
+      display.init(115200, true, 2, false);
+      drawRAW("/display.raw");
       display.powerOff();
     }
   }

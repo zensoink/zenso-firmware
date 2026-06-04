@@ -7,7 +7,6 @@ struct DeviceConfig {
   String ssid;
   String password;
   String api_url;
-  String device_id;
 };
 
 bool config_load(DeviceConfig &cfg);

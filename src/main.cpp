@@ -4,18 +4,11 @@
 #include <GxEPD2_7C.h>
 #include <epd7c/GxEPD2_730c_ACeP_730.h>
 #include "config.h"
+#include "pins.h"
+#include "version.h"
 #include "wifi_manager.h"
 
-// EE04 (XIAO ESP32-S3) pin mapping via 50-pin connector
-#define CS_PIN    44
-#define DC_PIN    10
-#define RST_PIN   38
-#define BUSY_PIN  4
-
-#define SCK_PIN   7
-#define MOSI_PIN  9
-
-#define KEY1_PIN  2
+// Pin definitions moved to include/pins.h
 
 #ifndef MAX_DISPLAY_BUFFER_SIZE
 #define MAX_DISPLAY_BUFFER_SIZE 65536ul

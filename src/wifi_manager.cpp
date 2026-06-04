@@ -3,6 +3,9 @@
 #include <DNSServer.h>
 #include <WebServer.h>
 #include "config.h"
+#include "version.h"
+#include "provisioning_screen.h"
+#include "device_identity.h"
 
 static const char PROVISIONING_HTML[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -19,12 +22,12 @@ static const char PROVISIONING_HTML[] PROGMEM = R"rawliteral(
 </style>
 </head>
 <body>
-<h2>Zenso WiFi Setup</h2>
+<h2>Zenso Configuration</h2>
 <form method="POST" action="/save">
   <label>WiFi SSID<input name="ssid" type="text"></label>
+  <small style="color:#666">Use a 2.4 GHz network (5 GHz not supported)</small>
   <label>Password<input name="password" type="password"></label>
   <label>API URL<input name="api_url" type="text" placeholder="http://192.168.1.x:3000"></label>
-  <label>Device ID<input name="device_id" type="text" placeholder="device-001"></label>
   <button type="submit">Save & Restart</button>
 </form>
 </body>
@@ -48,6 +51,15 @@ static const char SUCCESS_HTML[] PROGMEM = R"rawliteral(
 </body>
 </html>
 )rawliteral";
+
+static String provisioning_generate_password() {
+  static const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  String pwd;
+  for (uint8_t i = 0; i < 10; i++) {
+    pwd += chars[esp_random() % (sizeof(chars) - 1)];
+  }
+  return pwd;
+}
 
 bool wifi_connect(const DeviceConfig &cfg, uint32_t timeout_ms) {
   Serial.printf("WiFi: connecting to %s...\n", cfg.ssid.c_str());
@@ -73,15 +85,51 @@ bool wifi_connect(const DeviceConfig &cfg, uint32_t timeout_ms) {
 void wifi_start_provisioning(DeviceConfig &cfg) {
   Serial.println("Provisioning: starting captive portal...");
 
+  String ap_password = provisioning_generate_password();
+  String device_id = device_get_id();
+
+  WiFi.disconnect(true, true);
+  delay(200);
+
   WiFi.mode(WIFI_AP);
-  WiFi.softAP("Zenso-Setup");
-  IPAddress apIP = WiFi.softAPIP();
-  Serial.printf("Provisioning: AP started, IP: %s\n", apIP.toString().c_str());
+  delay(100);
+
+  bool ap_ok = WiFi.softAP("Zenso-Setup", ap_password.c_str());
+  delay(500);
+
+  Serial.printf("Provisioning: WiFi mode=%d\n", WiFi.getMode());
+  Serial.printf("Provisioning: softAP result=%d\n", ap_ok ? 1 : 0);
+  Serial.printf("Provisioning: SSID=Zenso-Setup\n");
+  Serial.printf("Provisioning: Password=%s\n", ap_password.c_str());
+  Serial.println("Provisioning: Device ID=" + device_id);
+  Serial.printf("Provisioning: AP IP=%s\n", WiFi.softAPIP().toString().c_str());
+
+  if (!ap_ok) {
+    Serial.println("Provisioning: FATAL — SoftAP failed to start, halting");
+    while (true) {
+      delay(1000);
+    }
+  }
 
   DNSServer dns;
-  dns.start(53, "*", apIP);
+  dns.start(53, "*", WiFi.softAPIP());
 
   WebServer server(80);
+
+  // iOS captive portal detection paths — redirect to setup form
+  const char* captive_paths[] = {
+    "/generate_204", "/hotspot-detect.html", "/library/test/success.html",
+    "/success.txt", "/ncsi.txt", "/connecttest.txt",
+    "/redirect", "/canonical.html"
+  };
+  for (const char* path : captive_paths) {
+    server.on(path, [&server]() {
+      server.sendHeader("Location", "/", true);
+      server.send(302, "text/html",
+        "<html><meta http-equiv='refresh' content='0;url=/'><body>"
+        "<a href='/'>Continue to setup</a></body></html>");
+    });
+  }
 
   server.on("/", [&server]() {
     server.send(200, "text/html", PROVISIONING_HTML);
@@ -91,7 +139,6 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     cfg.ssid = server.arg("ssid");
     cfg.password = server.arg("password");
     cfg.api_url = server.arg("api_url");
-    cfg.device_id = server.arg("device_id");
 
     server.send(200, "text/html", SUCCESS_HTML);
 
@@ -104,14 +151,22 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     ESP.restart();
   });
 
-  server.onNotFound([&apIP, &server]() {
-    server.sendHeader("Location", "http://" + apIP.toString() + "/", true);
-    server.send(302, "text/plain", "");
+  server.onNotFound([&server]() {
+    server.sendHeader("Location", "/", true);
+    server.send(302, "text/html",
+      "<html><meta http-equiv='refresh' content='0;url=/'><body>"
+      "<a href='/'>Continue to setup</a></body></html>");
   });
 
   server.begin();
   Serial.println("Provisioning: HTTP server started on port 80");
-  Serial.println("Provisioning: connect to Zenso-Setup and open http://192.168.4.1");
+
+  provisioning_screen_draw(
+    "Zenso-Setup",
+    ap_password,
+    "http://192.168.4.1",
+    FIRMWARE_VERSION
+  );
 
   while (true) {
     dns.processNextRequest();

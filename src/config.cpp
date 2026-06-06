@@ -22,6 +22,8 @@ bool config_load(DeviceConfig &cfg) {
   cfg.ssid = doc["ssid"] | "";
   cfg.password = doc["password"] | "";
   cfg.api_url = doc["api_url"] | "";
+  cfg.device_uid = doc["device_uid"] | "";
+  cfg.device_secret = doc["device_secret"] | "";
   // doc["device_id"] from legacy configs is intentionally ignored
 
   Serial.println("Config: loaded successfully");
@@ -33,6 +35,8 @@ bool config_save(const DeviceConfig &cfg) {
   doc["ssid"] = cfg.ssid;
   doc["password"] = cfg.password;
   doc["api_url"] = cfg.api_url;
+  doc["device_uid"] = cfg.device_uid;
+  doc["device_secret"] = cfg.device_secret;
   File file = LittleFS.open("/config.json", "w");
   if (!file) {
     Serial.println("Config: failed to open /config.json for writing");

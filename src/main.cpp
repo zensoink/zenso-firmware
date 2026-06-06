@@ -7,6 +7,7 @@
 #include "pins.h"
 #include "version.h"
 #include "wifi_manager.h"
+#include "http_client.h"
 
 // Pin definitions moved to include/pins.h
 
@@ -194,6 +195,10 @@ void setup()
   }
 
   Serial.println("Setup: WiFi connected, continuing...");
+
+  if (!http_fetch_display(cfg)) {
+    Serial.println("Setup: fetch failed -- will try to render cached /display.raw");
+  }
 
   SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
 

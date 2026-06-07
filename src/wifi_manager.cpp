@@ -94,7 +94,8 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     server.send(200, "text/html", PROVISIONING_HTML);
   });
 
-  server.on("/save", HTTP_POST, [&cfg, &server]() {
+  String claim_url;
+  server.on("/save", HTTP_POST, [&cfg, &server, &claim_url]() {
     cfg.ssid = server.arg("ssid");
     cfg.password = server.arg("password");
     cfg.api_url = server.arg("api_url");
@@ -150,7 +151,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
       return;
     }
 
-    String claim_url = resp["claim_url"].as<String>();
+    claim_url = resp["claim_url"].as<String>();
     String claim_session_id = resp["claim_session_id"].as<String>();
     String claim_expires_at = resp["claim_expires_at"].as<String>();
 
@@ -165,6 +166,8 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
       identity_save(identity);
       Serial.println("Provisioning: identity saved with claim data");
     }
+
+    provisioning_screen_draw_waiting(claim_url, WiFi.localIP().toString());
 
     server.send(200, "text/html",
       portal_html_success(cfg.ssid, WiFi.localIP().toString(), claim_url, claim_expires_at));
@@ -188,9 +191,57 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     FIRMWARE_VERSION
   );
 
-  while (true) {
+  // Claim polling loop — 30s interval
+  uint32_t last_poll = 0;
+  const uint32_t POLL_INTERVAL_MS = 30000;
+  bool claim_done = false;
+
+  while (!claim_done) {
     dns.processNextRequest();
     server.handleClient();
+
+    uint32_t now = millis();
+    if (now - last_poll >= POLL_INTERVAL_MS) {
+      last_poll = now;
+
+      // Load claim_session_id from identity
+      DeviceIdentity identity = identity_load();
+      if (identity.claim_session_id.length() == 0) {
+        Serial.println("Polling: no claim_session_id, skipping");
+        delay(10);
+        continue;
+      }
+
+      // GET /device/claim-status/:id
+      WiFiClient poll_client;
+      HTTPClient poll_http;
+      String poll_url = cfg.api_url + "/device/claim-status/" + identity.claim_session_id;
+      poll_http.begin(poll_client, poll_url);
+      int poll_code = poll_http.GET();
+      String poll_body = poll_http.getString();
+      poll_http.end();
+
+      Serial.printf("Polling: HTTP %d — %s\n", poll_code, poll_body.c_str());
+
+      if (poll_code == 200) {
+        JsonDocument poll_doc;
+        DeserializationError poll_err = deserializeJson(poll_doc, poll_body);
+        if (!poll_err) {
+          String status = poll_doc["status"].as<String>();
+          Serial.println("Polling: claim status = " + status);
+
+          if (status == "active") {
+            Serial.println("Polling: device claimed — exiting provisioning");
+            claim_done = true;
+          } else if (status == "expired") {
+            Serial.println("Polling: claim expired — showing expired screen");
+            provisioning_screen_draw_claim_expired();
+            while (true) { delay(1000); }
+          }
+        }
+      }
+    }
+
     delay(10);
   }
 }

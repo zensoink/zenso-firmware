@@ -145,9 +145,15 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
 
     JsonDocument resp;
     DeserializationError json_err = deserializeJson(resp, response_body);
-    if (json_err || !resp["claim_url"].is<String>()) {
+    if (json_err) {
       Serial.printf("Provisioning: bootstrap JSON parse error: %s\n", json_err.c_str());
       server.send(200, "text/html", portal_html_parse_error());
+      return;
+    }
+
+    if (resp["claim_url"].isNull()) {
+      Serial.println("Provisioning: device already claimed — no claim session needed");
+      server.send(200, "text/html", portal_html_already_claimed());
       return;
     }
 

@@ -151,10 +151,19 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     }
 
     String claim_url = resp["claim_url"].as<String>();
+    String claim_session_id = resp["claim_session_id"].as<String>();
     String claim_expires_at = resp["claim_expires_at"].as<String>();
 
     if (claim_url.indexOf("localhost") >= 0) {
       Serial.println("Provisioning: WARNING — claim_url contains 'localhost'. Set APP_BASE_URL to a real IP in the API .env file.");
+    }
+
+    {
+      DeviceIdentity identity = identity_load();
+      identity.claim_session_id = claim_session_id;
+      identity.claim_url = claim_url;
+      identity_save(identity);
+      Serial.println("Provisioning: identity saved with claim data");
     }
 
     server.send(200, "text/html",

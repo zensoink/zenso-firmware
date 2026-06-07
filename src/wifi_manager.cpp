@@ -231,6 +231,23 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
           Serial.println("Polling: claim status = " + status);
 
           if (status == "active") {
+            String uid = poll_doc["uid"].as<String>();
+            String device_secret = poll_doc["device_secret"].as<String>();
+
+            if (uid.length() > 0 && device_secret.length() > 0) {
+              DeviceIdentity identity = identity_load();
+              identity.uid = uid;
+              identity.device_secret = device_secret;
+              identity_save(identity);
+
+              cfg.device_uid = uid;
+              cfg.device_secret = device_secret;
+
+              Serial.println("Polling: uid=" + uid + " saved to identity and cfg");
+            } else {
+              Serial.println("Polling: WARNING — active status but missing uid/device_secret in response");
+            }
+
             Serial.println("Polling: device claimed — exiting provisioning");
             claim_done = true;
           } else if (status == "expired") {

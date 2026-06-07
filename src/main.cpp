@@ -197,12 +197,36 @@ void setup()
   if (force_provisioning) {
     Serial.println("Setup: KEY1 held — forcing provisioning mode");
     wifi_start_provisioning(cfg);
+    {
+      DeviceIdentity post_identity = identity_load();
+      if (post_identity.uid.length() > 0 && post_identity.device_secret.length() > 0) {
+        cfg.device_uid = post_identity.uid;
+        cfg.device_secret = post_identity.device_secret;
+        Serial.println("Setup: post-provisioning identity loaded, uid=" + post_identity.uid);
+      }
+    }
   } else if (!config_is_provisioned(cfg)) {
     Serial.println("Setup: no config found — starting provisioning mode");
     wifi_start_provisioning(cfg);
+    {
+      DeviceIdentity post_identity = identity_load();
+      if (post_identity.uid.length() > 0 && post_identity.device_secret.length() > 0) {
+        cfg.device_uid = post_identity.uid;
+        cfg.device_secret = post_identity.device_secret;
+        Serial.println("Setup: post-provisioning identity loaded, uid=" + post_identity.uid);
+      }
+    }
   } else if (!wifi_connect(cfg)) {
     Serial.println("Setup: WiFi connection failed — starting provisioning mode");
     wifi_start_provisioning(cfg);
+    {
+      DeviceIdentity post_identity = identity_load();
+      if (post_identity.uid.length() > 0 && post_identity.device_secret.length() > 0) {
+        cfg.device_uid = post_identity.uid;
+        cfg.device_secret = post_identity.device_secret;
+        Serial.println("Setup: post-provisioning identity loaded, uid=" + post_identity.uid);
+      }
+    }
   }
 
   Serial.println("Setup: WiFi connected, continuing...");

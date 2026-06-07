@@ -77,6 +77,14 @@ static inline String portal_html_parse_error() {
     "<button onclick=\"window.location.href='/'\">Go Back</button>");
 }
 
+static inline String portal_html_already_claimed() {
+  return _base_html("Device Ready",
+    "<h2>Device Already Claimed</h2>"
+    "<p>This device is already registered and linked to an account.</p>"
+    "<p>It will begin displaying content after restarting.</p>"
+    "<button onclick=\"window.location.href='/'\">Go Back</button>");
+}
+
 // --- Success page (different styling from error pages) ---
 
 static inline String portal_html_success(const String& ssid, const String& ip,

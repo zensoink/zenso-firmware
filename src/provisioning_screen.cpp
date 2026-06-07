@@ -17,6 +17,28 @@
 
 extern GxEPD2_7C<GxEPD2_730c_ACeP_730, MAX_HEIGHT_7C(GxEPD2_730c_ACeP_730)> display;
 
+// ── Layout constants (display: 800×480) ──
+
+// Left-column x (text-only screens)
+static const int16_t LX = 55;
+
+// Right-column x (screens with QR + text side by side)
+static const int16_t RIGHT_X   = 310;
+static const int16_t QR_X      = 35;
+static const int16_t QR_Y      = 50;
+static const int16_t QR_MODULE = 5;
+
+// Left-column Y positions (text-only screens)
+static const int16_t Y_TITLE = 100;
+static const int16_t Y_BODY1 = 160;
+static const int16_t Y_BODY2 = 200;
+static const int16_t Y_BODY3 = 240;
+static const int16_t Y_BODY4 = 290;
+
+// Footer / branding (shared by all)
+static const int16_t BRANDING_X = 700;
+static const int16_t BRANDING_Y = 455;
+
 void provisioning_screen_init() {
   SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
   display.init(115200, true, 2, false);
@@ -41,21 +63,16 @@ void provisioning_screen_draw(
     uint8_t qrcodeData[qrcode_getBufferSize(3)];
 
     if (qrcode_initText(&qrcode, qrcodeData, 3, ECC_LOW, wifi_qr.c_str()) == 0) {
-      const uint8_t module_px = 5;
-      uint16_t qr_size = qrcode.size * module_px;
-      int16_t qr_x = 40;
-      int16_t qr_y = 60;
+      uint16_t qr_size = qrcode.size * QR_MODULE;
 
-      // White background with quiet zone
-      display.fillRect(qr_x - module_px, qr_y - module_px,
-                       qr_size + 2 * module_px, qr_size + 2 * module_px, GxEPD_WHITE);
+      display.fillRect(QR_X - QR_MODULE, QR_Y - QR_MODULE,
+                       qr_size + 2 * QR_MODULE, qr_size + 2 * QR_MODULE, GxEPD_WHITE);
 
-      // Draw QR modules
       for (uint8_t y = 0; y < qrcode.size; y++) {
         for (uint8_t x = 0; x < qrcode.size; x++) {
           if (qrcode_getModule(&qrcode, x, y)) {
-            display.fillRect(qr_x + x * module_px, qr_y + y * module_px,
-                             module_px, module_px, GxEPD_BLACK);
+            display.fillRect(QR_X + x * QR_MODULE, QR_Y + y * QR_MODULE,
+                             QR_MODULE, QR_MODULE, GxEPD_BLACK);
           }
         }
       }
@@ -64,47 +81,44 @@ void provisioning_screen_draw(
     // ---- Text ----
     display.setTextColor(GxEPD_BLACK);
 
-    // Line 1: Title
-    display.setCursor(300, 80);
+    display.setCursor(RIGHT_X, 80);
     display.setTextSize(3);
     display.print("Setup Mode");
 
-    // Line 2: Step 1
-    display.setCursor(300, 140);
+    display.setCursor(RIGHT_X, 140);
     display.setTextSize(2);
     display.print("1. Scan QR or connect to WiFi:");
 
-    // Line 3: AP SSID
-    display.setCursor(300, 170);
+    display.setCursor(RIGHT_X, 170);
     display.setTextSize(2);
     display.print("   SSID: ");
     display.print(ap_ssid);
 
-    // Line 4: Password
-    display.setCursor(300, 200);
+    display.setCursor(RIGHT_X, 200);
     display.setTextSize(2);
     display.print("   Password: ");
     display.print(ap_password);
 
-    // Line 5: Step 2
-    display.setCursor(300, 250);
+    display.setCursor(RIGHT_X, 250);
     display.setTextSize(2);
     display.print("2. Open in browser:");
 
-    // Line 6: AP URL
-    display.setCursor(300, 280);
+    display.setCursor(RIGHT_X, 280);
     display.setTextSize(2);
     display.print("   ");
     display.print(ap_url);
 
-    // ---- Bottom: Firmware version (right-aligned) ----
+    // Bottom: Firmware version + branding
     String fw_str = "Firmware: " + firmware_version;
     int16_t x1, y1;
     uint16_t fw_w, fw_h;
     display.setTextSize(1);
     display.getTextBounds(fw_str, 0, 0, &x1, &y1, &fw_w, &fw_h);
-    display.setCursor(760 - fw_w, 435);
+    display.setCursor(BRANDING_X - fw_w - 20, BRANDING_Y);
     display.print(fw_str);
+
+    display.setCursor(BRANDING_X, BRANDING_Y);
+    display.print("zenso.ink");
 
   } while (display.nextPage());
 
@@ -121,19 +135,16 @@ void provisioning_screen_draw_waiting(const String &claim_url, const String &wif
     uint8_t qrcodeData[qrcode_getBufferSize(4)];
 
     if (qrcode_initText(&qrcode, qrcodeData, 4, ECC_LOW, claim_url.c_str()) == 0) {
-      const uint8_t module_px = 4;
-      uint16_t qr_size = qrcode.size * module_px;
-      int16_t qr_x = 30;
-      int16_t qr_y = 40;
+      uint16_t qr_size = qrcode.size * QR_MODULE;
 
-      display.fillRect(qr_x - module_px, qr_y - module_px,
-                       qr_size + 2 * module_px, qr_size + 2 * module_px, GxEPD_WHITE);
+      display.fillRect(QR_X - QR_MODULE, QR_Y - QR_MODULE,
+                       qr_size + 2 * QR_MODULE, qr_size + 2 * QR_MODULE, GxEPD_WHITE);
 
       for (uint8_t y = 0; y < qrcode.size; y++) {
         for (uint8_t x = 0; x < qrcode.size; x++) {
           if (qrcode_getModule(&qrcode, x, y)) {
-            display.fillRect(qr_x + x * module_px, qr_y + y * module_px,
-                             module_px, module_px, GxEPD_BLACK);
+            display.fillRect(QR_X + x * QR_MODULE, QR_Y + y * QR_MODULE,
+                             QR_MODULE, QR_MODULE, GxEPD_BLACK);
           }
         }
       }
@@ -142,29 +153,28 @@ void provisioning_screen_draw_waiting(const String &claim_url, const String &wif
     // ---- Text ----
     display.setTextColor(GxEPD_BLACK);
 
-    display.setCursor(320, 60);
+    display.setCursor(RIGHT_X, 60);
     display.setTextSize(3);
     display.print("Waiting for");
 
-    display.setCursor(320, 100);
+    display.setCursor(RIGHT_X, 100);
     display.setTextSize(3);
     display.print("Authorization");
 
-    display.setCursor(320, 160);
+    display.setCursor(RIGHT_X, 160);
     display.setTextSize(2);
     display.print("WiFi connected: ");
     display.print(wifi_ip);
 
-    display.setCursor(320, 200);
+    display.setCursor(RIGHT_X, 200);
     display.setTextSize(2);
     display.print("Scan QR or open link in browser");
 
-    display.setCursor(320, 240);
+    display.setCursor(RIGHT_X, 240);
     display.setTextSize(2);
     display.print("to claim this device");
 
-    // Bottom right
-    display.setCursor(700, 455);
+    display.setCursor(BRANDING_X, BRANDING_Y);
     display.setTextSize(1);
     display.print("zenso.ink");
 
@@ -179,29 +189,65 @@ void provisioning_screen_draw_claim_expired() {
     display.fillScreen(GxEPD_WHITE);
 
     display.setTextColor(GxEPD_RED);
-    display.setCursor(50, 100);
+    display.setCursor(LX, Y_TITLE);
     display.setTextSize(3);
     display.print("Claim Expired");
 
     display.setTextColor(GxEPD_BLACK);
-    display.setCursor(50, 170);
+    display.setCursor(LX, Y_BODY1);
     display.setTextSize(2);
     display.print("Authorization window has closed.");
 
-    display.setCursor(50, 210);
+    display.setCursor(LX, Y_BODY2);
     display.setTextSize(2);
     display.print("To try again:");
 
-    display.setCursor(50, 250);
+    display.setCursor(LX, Y_BODY3);
     display.setTextSize(2);
     display.print("Hold KEY1 for 3 seconds");
 
-    display.setCursor(50, 290);
+    display.setCursor(LX, Y_BODY4);
     display.setTextSize(2);
     display.print("to restart provisioning.");
 
-    // Bottom right
-    display.setCursor(700, 455);
+    display.setCursor(BRANDING_X, BRANDING_Y);
+    display.setTextSize(1);
+    display.print("zenso.ink");
+
+  } while (display.nextPage());
+
+  display.powerOff();
+}
+
+void provisioning_screen_draw_no_content(const String &device_uid) {
+  display.firstPage();
+  do {
+    display.fillScreen(GxEPD_WHITE);
+
+    display.setTextColor(GxEPD_BLACK);
+
+    display.setCursor(LX, Y_TITLE);
+    display.setTextSize(3);
+    display.print("Device Ready");
+
+    display.setCursor(LX, Y_BODY1);
+    display.setTextSize(2);
+    display.print("No content assigned yet.");
+
+    display.setCursor(LX, Y_BODY2);
+    display.setTextSize(2);
+    display.print("Open the Zenso panel to assign");
+
+    display.setCursor(LX, Y_BODY3);
+    display.setTextSize(2);
+    display.print("a screen to this device.");
+
+    display.setCursor(LX, Y_BODY4);
+    display.setTextSize(1);
+    display.print("Device ID: ");
+    display.print(device_uid);
+
+    display.setCursor(BRANDING_X, BRANDING_Y);
     display.setTextSize(1);
     display.print("zenso.ink");
 

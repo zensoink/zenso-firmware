@@ -9,6 +9,7 @@
 #include "version.h"
 #include "wifi_manager.h"
 #include "http_client.h"
+#include "provisioning_screen.h"
 
 // Pin definitions moved to include/pins.h
 
@@ -231,9 +232,7 @@ void setup()
 
   Serial.println("Setup: WiFi connected, continuing...");
 
-  if (!http_fetch_display(cfg)) {
-    Serial.println("Setup: fetch failed -- will try to render cached /display.raw");
-  }
+  FetchResult fetch_result = http_fetch_display(cfg);
 
   SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
 
@@ -241,9 +240,18 @@ void setup()
   display.setRotation(0);
   display.setFullWindow();
 
-  if (!drawRAW("/display.raw"))
-  {
-    Serial.println("Render RAW nieudany");
+  if (fetch_result == FetchResult::NO_CONTENT) {
+    Serial.println("Setup: no screen assigned — drawing placeholder");
+    provisioning_screen_draw_no_content(cfg.device_uid);
+  } else if (fetch_result == FetchResult::ERROR) {
+    Serial.println("Setup: fetch error — trying cached /display.raw");
+    if (!drawRAW("/display.raw")) {
+      provisioning_screen_draw_no_content(cfg.device_uid);
+    }
+  } else {
+    if (!drawRAW("/display.raw")) {
+      provisioning_screen_draw_no_content(cfg.device_uid);
+    }
   }
 
   display.powerOff();

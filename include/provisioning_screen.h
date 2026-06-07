@@ -11,4 +11,7 @@ void provisioning_screen_draw(
   const String &firmware_version
 );
 
+void provisioning_screen_draw_waiting(const String &claim_url, const String &wifi_ip);
+void provisioning_screen_draw_claim_expired();
+
 #endif

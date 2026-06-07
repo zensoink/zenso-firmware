@@ -224,12 +224,12 @@ void provisioning_screen_draw_no_content(const String &device_uid) {
   do {
     display.fillScreen(GxEPD_WHITE);
 
-    display.setTextColor(GxEPD_BLACK);
-
+    display.setTextColor(GxEPD_GREEN);
     display.setCursor(LX, Y_TITLE);
     display.setTextSize(3);
     display.print("Device Ready");
 
+    display.setTextColor(GxEPD_BLACK);
     display.setCursor(LX, Y_BODY1);
     display.setTextSize(2);
     display.print("No content assigned yet.");

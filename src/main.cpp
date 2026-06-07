@@ -10,8 +10,7 @@
 #include "wifi_manager.h"
 #include "http_client.h"
 #include "provisioning_screen.h"
-
-// Pin definitions moved to include/pins.h
+#include "dev_menu.h"
 
 #ifndef MAX_DISPLAY_BUFFER_SIZE
 #define MAX_DISPLAY_BUFFER_SIZE 65536ul
@@ -36,12 +35,14 @@ static const uint16_t epdPalette[7] = {
   GxEPD_ORANGE
 };
 
+static DeviceConfig cfg;
+
 bool drawRAW(const char *filename)
 {
   File rawFile = LittleFS.open(filename, "r");
   if (!rawFile)
   {
-    Serial.println("BŁĄD: Nie można otworzyć pliku RAW");
+    Serial.println("ERROR: Cannot open RAW file");
     return false;
   }
 
@@ -51,12 +52,12 @@ bool drawRAW(const char *filename)
   const uint32_t expectedSize = rowSize * h;
 
   size_t fileSize = rawFile.size();
-  Serial.printf("RAW: plik=%s, size=%u, expected=%lu, ekran=%dx%d\n",
+  Serial.printf("RAW: file=%s, size=%u, expected=%lu, screen=%dx%d\n",
                 filename, (unsigned)fileSize, (unsigned long)expectedSize, w, h);
 
   if (fileSize != expectedSize)
   {
-    Serial.println("BŁĄD: Niepoprawny rozmiar pliku RAW");
+    Serial.println("ERROR: Invalid RAW file size");
     rawFile.close();
     return false;
   }
@@ -64,7 +65,7 @@ bool drawRAW(const char *filename)
   uint8_t *rowBuffer = (uint8_t *)malloc(rowSize);
   if (!rowBuffer)
   {
-    Serial.println("BŁĄD: Brak pamięci na rowBuffer");
+    Serial.println("ERROR: No memory for rowBuffer");
     rawFile.close();
     return false;
   }
@@ -81,7 +82,7 @@ bool drawRAW(const char *filename)
 
     if (!rawFile.seek(0))
     {
-      Serial.println("BŁĄD: seek(0) nieudany");
+      Serial.println("ERROR: seek(0) failed");
       free(rowBuffer);
       rawFile.close();
       return false;
@@ -92,7 +93,7 @@ bool drawRAW(const char *filename)
       size_t n = rawFile.read(rowBuffer, rowSize);
       if (n != rowSize)
       {
-        Serial.printf("BŁĄD: read row=%d got=%u expected=%lu\n",
+        Serial.printf("ERROR: read row=%d got=%u expected=%lu\n",
                       y, (unsigned)n, (unsigned long)rowSize);
         free(rowBuffer);
         rawFile.close();
@@ -128,13 +129,13 @@ bool drawRAW(const char *filename)
 
   free(rowBuffer);
   rawFile.close();
-  Serial.println("RAW wyrenderowany");
+  Serial.println("RAW rendered");
   return true;
 }
 
 void clearToWhite()
 {
-  Serial.println("Czyszczenie ekranu...");
+  Serial.println("Clearing screen...");
 
   display.init(115200, true, 2, false);
   display.setRotation(0);
@@ -148,7 +149,7 @@ void clearToWhite()
   while (display.nextPage());
 
   display.powerOff();
-  Serial.println("Ekran wyczyszczony");
+  Serial.println("Screen cleared");
 }
 
 void setup()
@@ -158,17 +159,16 @@ void setup()
 
   pinMode(KEY1_PIN, INPUT_PULLUP);
 
-  Serial.println("\n===== START RAW =====");
+  Serial.println("\n===== START =====");
 
   if (!LittleFS.begin(true))
   {
-    Serial.println("BŁĄD LittleFS");
+    Serial.println("ERROR LittleFS");
     return;
   }
 
   Serial.println("LittleFS OK");
 
-  DeviceConfig cfg;
   config_load(cfg);
 
   DeviceIdentity identity = identity_load();
@@ -255,7 +255,7 @@ void setup()
   }
 
   display.powerOff();
-  Serial.println("===== GOTOWE =====");
+  Serial.println("===== DONE =====");
 }
 
 void loop()
@@ -270,19 +270,7 @@ void loop()
 
   if (Serial.available() > 0)
   {
-    int c = Serial.read();
-
-    if (c == 27)
-    {
-      clearToWhite();
-    }
-    else if (c == 'r' || c == 'R')
-    {
-      Serial.println("Ponowne renderowanie RAW...");
-      display.init(115200, true, 2, false);
-      drawRAW("/display.raw");
-      display.powerOff();
-    }
+    handle_dev_command(Serial.read(), cfg);
   }
 
   delay(10);

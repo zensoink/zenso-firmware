@@ -28,7 +28,7 @@ The display connects directly to the EE04 baseboard via the 50-pin FPC connector
 - **Speed:** 115200 baud (configurable via display.init())
 - **Power:** 3.3V from XIAO (supplied by EE04 baseboard)
 
-### Pin Definitions (src/main.cpp)
+### Pin Definitions (include/pins.h)
 ```cpp
 #define CS_PIN    44
 #define DC_PIN    10
@@ -117,8 +117,12 @@ lib_deps =
 #include <SPI.h>
 #include <GxEPD2_7C.h>
 #include <epd7c/GxEPD2_730c_ACeP_730.h>
-#include <Fonts/FreeMono9pt7b.h>
-// (no local headers in current project)
+#include "config.h"
+#include "pins.h"
+#include "version.h"
+#include "http_client.h"
+#include "provisioning_screen.h"
+#include "dev_menu.h"
 ```
 
 ### Type Usage
@@ -143,7 +147,7 @@ lib_deps =
 ### Error Handling & Validation
 - Always validate pin configurations at startup
 - Log initialization status via Serial.println()
-- Use descriptive error messages (e.g., "Display init failed")
+- Use descriptive error messages
 - Check for timeout conditions in loops
 - Return meaningful status codes (0 = success)
 
@@ -155,7 +159,7 @@ lib_deps =
   ```cpp
   Serial.println("Initializing display...");
   display.init(115200);
-  Serial.println("✓ Display initialized");
+  Serial.println("Display initialized");
   ```
 
 ---
@@ -165,22 +169,40 @@ lib_deps =
 ```
 zenso-firmware/
 ├── src/
-│   └── main.cpp              // Main firmware code
-├── lib/
-│   ├── .gitkeep             // Empty (dependencies via PlatformIO)
+│   ├── main.cpp               // Entry point, display init, fetch logic
+│   ├── dev_menu.cpp            // Serial developer menu
+│   ├── provisioning_screen.cpp // Status screens (setup, waiting, expired, no content)
+│   ├── http_client.cpp         // API login + display fetch with ETag caching
+│   ├── wifi_manager.cpp        // WiFi connect + captive portal provisioning
+│   ├── config.cpp              // WiFi/API config persistence
+│   └── device_identity.cpp     // Device identity (uid, secret) persistence
 ├── include/
-│   └── .gitkeep             // For future local headers
-├── platformio.ini           // PlatformIO configuration
-├── AGENTS.md                // This file (AI agent guidelines)
-├── README.md                // User-facing documentation
+│   ├── dev_menu.h              // Developer serial menu header
+│   ├── provisioning_screen.h   // Status screen function declarations
+│   ├── http_client.h           // FetchResult enum + fetch declaration
+│   ├── wifi_manager.h          // WiFi connect + provisioning
+│   ├── config.h                // DeviceConfig struct + load/save
+│   ├── device_identity.h       // DeviceIdentity struct + load/save
+│   ├── pins.h                  // GPIO pin constants
+│   └── version.h               // FIRMWARE_VERSION
+├── lib/
+│   └── .gitkeep                // Empty (dependencies via PlatformIO)
+├── platformio.ini              // PlatformIO configuration
+├── AGENTS.md                   // This file (AI agent guidelines)
+├── README.md                   // User-facing documentation
 └── .vscode/
-    └── c_cpp_properties.json // IntelliSense configuration
+    └── c_cpp_properties.json   // IntelliSense configuration
 ```
 
 ### Key Files
-- **src/main.cpp** — Display initialization, test rendering, sleep mode
-- **platformio.ini** — Build settings, library dependencies, compiler flags
-- **.vscode/c_cpp_properties.json** — IntelliSense include paths for VS Code
+- **src/main.cpp** — Boot logic: provisioning flow, display fetch via FetchResult enum, status screen fallback
+- **src/http_client.cpp** — Device login, display fetch with ETag/304 caching, returns FetchResult
+- **src/provisioning_screen.cpp** — 4 status screens (Setup QR, Waiting, Claim Expired, No Content), shared layout constants
+- **src/dev_menu.cpp** — Developer serial menu (h/c/r/1-4)
+- **src/wifi_manager.cpp** — Captive portal with QR code + claim polling loop
+- **include/http_client.h** — FetchResult enum (OK, NOT_MODIFIED, NO_CONTENT, ERROR)
+- **include/pins.h** — GPIO constants for EE04 baseboard
+- **include/version.h** — FIRMWARE_VERSION string
 
 ---
 
@@ -219,5 +241,5 @@ do {
 
 ---
 
-**Last Updated:** 2026-05-22
+**Last Updated:** 2026-06-07
 **Maintainer:** Konrad Stępiń (@konradstepien)

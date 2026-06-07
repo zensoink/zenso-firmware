@@ -6,35 +6,10 @@
 #include "version.h"
 #include "provisioning_screen.h"
 #include "device_identity.h"
+#include "portal_html.h"
 #include <WiFiClient.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-
-static const char PROVISIONING_HTML[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Zenso Setup</title>
-<style>
-  body{font-family:sans-serif;padding:20px;max-width:400px;margin:0 auto}
-  label{display:block;margin:12px 0}
-  input{width:100%;padding:8px;box-sizing:border-box;margin-top:4px}
-  button{padding:10px 20px;font-size:16px;margin-top:12px}
-</style>
-</head>
-<body>
-<h2>Zenso Configuration</h2>
-<form method="POST" action="/save">
-  <label>WiFi SSID/Name<input name="ssid" type="text"></label>
-  <label>Password<input name="password" type="password"></label>
-  <label>API URL<input name="api_url" type="text" placeholder="http://192.168.1.x:3000"></label>
-  <button type="submit">Save & Restart</button>
-</form>
-</body>
-</html>
-)rawliteral";
 
 
 static String provisioning_generate_password() {
@@ -111,9 +86,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
   for (const char* path : captive_paths) {
     server.on(path, [&server]() {
       server.sendHeader("Location", "/", true);
-      server.send(302, "text/html",
-        "<html><meta http-equiv='refresh' content='0;url=/'><body>"
-        "<a href='/'>Continue to setup</a></body></html>");
+      server.send(302, "text/html", REDIRECT_HTML);
     });
   }
 
@@ -131,24 +104,13 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
 
     if (!wifi_connect(cfg, 15000)) {
       Serial.println("Provisioning: WiFi connection failed");
-      server.send(200, "text/html",
-        "<!DOCTYPE html><html><head>"
-        "<meta charset=\"UTF-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>Connection Failed</title>"
-        "<style>"
-        "body{font-family:sans-serif;padding:20px;max-width:400px;margin:0 auto;text-align:center}"
-        "button{padding:10px 20px;font-size:16px;margin-top:12px;background:#f44336;color:#fff;border:none;border-radius:4px;cursor:pointer}"
-        "</style></head><body>"
-        "<h2>WiFi Connection Failed</h2>"
-        "<p>Could not connect to <strong>" + cfg.ssid + "</strong>.</p>"
-        "<p>Check your WiFi credentials and try again.</p>"
-        "<button onclick=\"window.location.href='/'\">Go Back</button>"
-        "</body></html>");
+      server.send(200, "text/html", portal_html_wifi_failed(cfg.ssid));
       return;
     }
 
     Serial.printf("Provisioning: WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
+
+    delay(500);
 
     WiFiClient client;
     HTTPClient http;
@@ -174,22 +136,9 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     String response_body = http.getString();
     http.end();
 
-    if (http_code != 200) {
+    if (http_code != 200 && http_code != 201) {
       Serial.printf("Provisioning: bootstrap HTTP %d\n", http_code);
-      server.send(200, "text/html",
-        "<!DOCTYPE html><html><head>"
-        "<meta charset=\"UTF-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>Server Error</title>"
-        "<style>"
-        "body{font-family:sans-serif;padding:20px;max-width:400px;margin:0 auto;text-align:center}"
-        "button{padding:10px 20px;font-size:16px;margin-top:12px;background:#f44336;color:#fff;border:none;border-radius:4px;cursor:pointer}"
-        "</style></head><body>"
-        "<h2>Server Error</h2>"
-        "<p>Failed to register device with server.</p>"
-        "<p>HTTP status: " + String(http_code) + "</p>"
-        "<button onclick=\"window.location.href='/'\">Go Back</button>"
-        "</body></html>");
+      server.send(200, "text/html", portal_html_server_error(http_code));
       return;
     }
 
@@ -197,53 +146,25 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     DeserializationError json_err = deserializeJson(resp, response_body);
     if (json_err || !resp["claim_url"].is<String>()) {
       Serial.printf("Provisioning: bootstrap JSON parse error: %s\n", json_err.c_str());
-      server.send(200, "text/html",
-        "<!DOCTYPE html><html><head>"
-        "<meta charset=\"UTF-8\">"
-        "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-        "<title>Parse Error</title>"
-        "<style>"
-        "body{font-family:sans-serif;padding:20px;max-width:400px;margin:0 auto;text-align:center}"
-        "button{padding:10px 20px;font-size:16px;margin-top:12px;background:#f44336;color:#fff;border:none;border-radius:4px;cursor:pointer}"
-        "</style></head><body>"
-        "<h2>Invalid Server Response</h2>"
-        "<button onclick=\"window.location.href='/'\">Go Back</button>"
-        "</body></html>");
+      server.send(200, "text/html", portal_html_parse_error());
       return;
     }
 
     String claim_url = resp["claim_url"].as<String>();
     String claim_expires_at = resp["claim_expires_at"].as<String>();
 
-    String success_page =
-      "<!DOCTYPE html><html><head>"
-      "<meta charset=\"UTF-8\">"
-      "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-      "<title>Setup Complete</title>"
-      "<style>"
-      "body{font-family:sans-serif;padding:20px;max-width:400px;margin:0 auto;text-align:center}"
-      "a{word-break:break-all;color:#1976D2}"
-      "button{padding:12px 24px;font-size:18px;margin-top:16px;background:#4CAF50;color:#fff;border:none;border-radius:4px;cursor:pointer}"
-      "</style></head><body>"
-      "<h2>WiFi Connected</h2>"
-      "<p>Device connected to <strong>" + cfg.ssid + "</strong>.</p>"
-      "<p>IP: " + WiFi.localIP().toString() + "</p>"
-      "<hr>"
-      "<p><strong>Claim your device:</strong></p>"
-      "<p><a href=\"" + claim_url + "\">" + claim_url + "</a></p>"
-      "<p>Expires: " + claim_expires_at + "</p>"
-      "<button onclick=\"window.location.href='" + claim_url + "'\">Continue in Zenso</button>"
-      "</body></html>";
+    if (claim_url.indexOf("localhost") >= 0) {
+      Serial.println("Provisioning: WARNING — claim_url contains 'localhost'. Set APP_BASE_URL to a real IP in the API .env file.");
+    }
 
-    server.send(200, "text/html", success_page);
+    server.send(200, "text/html",
+      portal_html_success(cfg.ssid, WiFi.localIP().toString(), claim_url, claim_expires_at));
     Serial.println("Provisioning: bootstrap success, portal continues");
   });
 
   server.onNotFound([&server]() {
     server.sendHeader("Location", "/", true);
-    server.send(302, "text/html",
-      "<html><meta http-equiv='refresh' content='0;url=/'><body>"
-      "<a href='/'>Continue to setup</a></body></html>");
+    server.send(302, "text/html", REDIRECT_HTML);
   });
 
   server.begin();

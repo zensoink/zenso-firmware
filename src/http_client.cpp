@@ -4,8 +4,9 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include "config.h"
+#include "http_client.h"
 
-bool http_fetch_display(const DeviceConfig &cfg) {
+FetchResult http_fetch_display(const DeviceConfig &cfg) {
   // Validate config
   String missing;
   if (cfg.api_url.length() == 0) missing += "api_url";
@@ -19,7 +20,7 @@ bool http_fetch_display(const DeviceConfig &cfg) {
   }
   if (missing.length() > 0) {
     Serial.printf("[HttpClient] Missing required config: %s\n", missing.c_str());
-    return false;
+    return FetchResult::ERROR;
   }
 
   WiFiClient client;
@@ -40,7 +41,7 @@ bool http_fetch_display(const DeviceConfig &cfg) {
   if (login_code != 200) {
     Serial.printf("[HttpClient] Login failed: HTTP %d\n", login_code);
     http.end();
-    return false;
+    return FetchResult::ERROR;
   }
 
   String login_resp = http.getString();
@@ -50,13 +51,13 @@ bool http_fetch_display(const DeviceConfig &cfg) {
   DeserializationError err = deserializeJson(token_doc, login_resp);
   if (err) {
     Serial.printf("[HttpClient] Login JSON parse error: %s\n", err.c_str());
-    return false;
+    return FetchResult::ERROR;
   }
 
   String token = token_doc["accessToken"].as<String>();
   if (token.length() == 0) {
     Serial.printf("[HttpClient] Login response missing accessToken\n");
-    return false;
+    return FetchResult::ERROR;
   }
   Serial.printf("[HttpClient] Login OK, token=%d chars\n", token.length());
 
@@ -89,13 +90,19 @@ bool http_fetch_display(const DeviceConfig &cfg) {
   if (display_code == 304) {
     Serial.printf("[HttpClient] 304 Not Modified - reusing cache\n");
     http.end();
-    return true;
+    return FetchResult::NOT_MODIFIED;
+  }
+
+  if (display_code == 404) {
+    Serial.println("[HttpClient] 404 — no screen assigned to this device");
+    http.end();
+    return FetchResult::NO_CONTENT;
   }
 
   if (display_code != 200) {
     Serial.printf("[HttpClient] Display fetch failed: HTTP %d\n", display_code);
     http.end();
-    return false;
+    return FetchResult::ERROR;
   }
 
   // Stream body to /display.raw
@@ -104,7 +111,7 @@ bool http_fetch_display(const DeviceConfig &cfg) {
   if (!file) {
     Serial.printf("[HttpClient] Failed to open /display.raw for writing\n");
     http.end();
-    return false;
+    return FetchResult::ERROR;
   }
 
   uint8_t buf[512];
@@ -123,7 +130,7 @@ bool http_fetch_display(const DeviceConfig &cfg) {
   if (total == 0) {
     Serial.printf("[HttpClient] 0 bytes written to /display.raw\n");
     http.end();
-    return false;
+    return FetchResult::ERROR;
   }
   Serial.printf("[HttpClient] Written %u bytes to /display.raw\n", (unsigned)total);
 
@@ -139,5 +146,5 @@ bool http_fetch_display(const DeviceConfig &cfg) {
   }
 
   http.end();
-  return true;
+  return FetchResult::OK;
 }

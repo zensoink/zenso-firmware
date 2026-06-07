@@ -4,6 +4,7 @@
 #include <GxEPD2_7C.h>
 #include <epd7c/GxEPD2_730c_ACeP_730.h>
 #include "config.h"
+#include "device_identity.h"
 #include "pins.h"
 #include "version.h"
 #include "wifi_manager.h"
@@ -168,6 +169,16 @@ void setup()
 
   DeviceConfig cfg;
   config_load(cfg);
+
+  DeviceIdentity identity = identity_load();
+
+  if (identity.uid.length() > 0 && identity.device_secret.length() > 0) {
+    cfg.device_uid = identity.uid;
+    cfg.device_secret = identity.device_secret;
+    Serial.println("Setup: identity loaded, uid=" + identity.uid);
+  } else {
+    Serial.println("Setup: no uid/secret yet — device not claimed");
+  }
 
   // KEY1 hold detection — force provisioning if held for 3s
   bool force_provisioning = false;

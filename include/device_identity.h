@@ -3,11 +3,10 @@
 #include <Arduino.h>
 
 struct DeviceIdentity {
-  String device_id;
+  String hardware_id;
   String bootstrap_secret;
   String claim_session_id;
   String claim_url;
-  String hardware_id;
   String device_secret;
 };
 

@@ -198,8 +198,8 @@ void setup()
   if (force_provisioning) {
     Serial.println("Setup: KEY1 held — wiping identity for fresh claim");
     DeviceIdentity blank;
-    blank.device_id = device_get_id();
-    blank.bootstrap_secret = normalize_hardware_id(blank.device_id);
+    blank.hardware_id = device_get_id();
+    blank.bootstrap_secret = blank.hardware_id;
     identity_save(blank);
     cfg.hardware_id = "";
     cfg.device_secret = "";

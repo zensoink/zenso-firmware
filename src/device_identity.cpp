@@ -19,16 +19,16 @@ String normalize_hardware_id(const String &raw) {
 String device_get_id() {
   uint8_t mac[6];
   WiFi.macAddress(mac);
-  char buf[18];
-  sprintf(buf, "%02X:%02X:%02X:%02X:%02X:%02X",
+  char buf[13];
+  sprintf(buf, "%02X%02X%02X%02X%02X%02X",
           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   return String(buf);
 }
 
 DeviceIdentity identity_load() {
   DeviceIdentity identity;
-  identity.device_id = device_get_id();
-  identity.bootstrap_secret = normalize_hardware_id(identity.device_id);
+  identity.hardware_id = device_get_id();
+  identity.bootstrap_secret = identity.hardware_id;
 
   File file = LittleFS.open("/identity.json", "r");
   if (!file) {
@@ -45,7 +45,6 @@ DeviceIdentity identity_load() {
     return identity;
   }
 
-  identity.device_id = doc["device_id"] | identity.device_id;
   identity.bootstrap_secret = doc["bootstrap_secret"] | identity.bootstrap_secret;
   identity.claim_session_id = doc["claim_session_id"] | "";
   identity.claim_url = doc["claim_url"] | "";
@@ -58,7 +57,6 @@ DeviceIdentity identity_load() {
 
 void identity_save(const DeviceIdentity &identity) {
   JsonDocument doc;
-  doc["device_id"] = identity.device_id;
   doc["bootstrap_secret"] = identity.bootstrap_secret;
   doc["claim_session_id"] = identity.claim_session_id;
   doc["claim_url"] = identity.claim_url;

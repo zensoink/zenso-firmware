@@ -47,7 +47,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
   Serial.println("Provisioning: starting captive portal...");
 
   String ap_password = provisioning_generate_password();
-  String device_id = device_get_id();
+  String hardware_id = device_get_id();
 
   WiFi.disconnect(true, true);
   delay(200);
@@ -62,7 +62,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
   Serial.printf("Provisioning: softAP result=%d\n", ap_ok ? 1 : 0);
   Serial.printf("Provisioning: SSID=Zenso-Setup\n");
   Serial.printf("Provisioning: Password=%s\n", ap_password.c_str());
-  Serial.println("Provisioning: Device ID=" + device_id);
+  Serial.println("Provisioning: Device ID=" + hardware_id);
   Serial.printf("Provisioning: AP IP=%s\n", WiFi.softAPIP().toString().c_str());
 
   if (!ap_ok) {
@@ -119,10 +119,9 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     http.begin(client, bootstrap_url);
     http.addHeader("Content-Type", "application/json");
 
-    String device_id = device_get_id();
+    String hardware_id = normalize_hardware_id(device_get_id());
     JsonDocument body;
-    body["device_id"] = device_id;
-    body["local_setup_token"] = device_id;
+    body["hardware_id"] = hardware_id;
     body["firmware_version"] = FIRMWARE_VERSION;
     body["hardware_info"] = JsonObject();
     JsonObject display_info = body["display_info"].to<JsonObject>();

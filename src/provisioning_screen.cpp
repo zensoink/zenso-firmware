@@ -219,7 +219,7 @@ void provisioning_screen_draw_claim_expired() {
   display.powerOff();
 }
 
-void provisioning_screen_draw_no_content(const String &device_uid) {
+void provisioning_screen_draw_no_content(const String &hardware_id) {
   display.firstPage();
   do {
     display.fillScreen(GxEPD_WHITE);
@@ -245,7 +245,7 @@ void provisioning_screen_draw_no_content(const String &device_uid) {
     display.setCursor(LX, Y_BODY4);
     display.setTextSize(1);
     display.print("Device ID: ");
-    display.print(device_uid);
+    display.print(hardware_id);
 
     display.setCursor(BRANDING_X, BRANDING_Y);
     display.setTextSize(1);

@@ -4,6 +4,18 @@
 #include <ArduinoJson.h>
 #include "device_identity.h"
 
+String normalize_hardware_id(const String &raw) {
+  String result;
+  result.reserve(raw.length());
+  for (size_t i = 0; i < raw.length(); i++) {
+    char c = raw.charAt(i);
+    if (c != ':' && c != '-') {
+      result += toupper(c);
+    }
+  }
+  return result;
+}
+
 String device_get_id() {
   uint8_t mac[6];
   WiFi.macAddress(mac);
@@ -16,7 +28,7 @@ String device_get_id() {
 DeviceIdentity identity_load() {
   DeviceIdentity identity;
   identity.device_id = device_get_id();
-  identity.bootstrap_secret = identity.device_id;
+  identity.bootstrap_secret = normalize_hardware_id(identity.device_id);
 
   File file = LittleFS.open("/identity.json", "r");
   if (!file) {
@@ -37,7 +49,7 @@ DeviceIdentity identity_load() {
   identity.bootstrap_secret = doc["bootstrap_secret"] | identity.bootstrap_secret;
   identity.claim_session_id = doc["claim_session_id"] | "";
   identity.claim_url = doc["claim_url"] | "";
-  identity.uid = doc["uid"] | "";
+  identity.hardware_id = doc["hardware_id"] | "";
   identity.device_secret = doc["device_secret"] | "";
 
   Serial.println("Identity: loaded from /identity.json");
@@ -50,7 +62,7 @@ void identity_save(const DeviceIdentity &identity) {
   doc["bootstrap_secret"] = identity.bootstrap_secret;
   doc["claim_session_id"] = identity.claim_session_id;
   doc["claim_url"] = identity.claim_url;
-  doc["uid"] = identity.uid;
+  doc["hardware_id"] = identity.hardware_id;
   doc["device_secret"] = identity.device_secret;
 
   File file = LittleFS.open("/identity.json", "w");

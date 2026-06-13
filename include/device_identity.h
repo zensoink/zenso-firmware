@@ -7,10 +7,11 @@ struct DeviceIdentity {
   String bootstrap_secret;
   String claim_session_id;
   String claim_url;
-  String uid;
+  String hardware_id;
   String device_secret;
 };
 
 String device_get_id();
+String normalize_hardware_id(const String &raw);
 DeviceIdentity identity_load();
 void identity_save(const DeviceIdentity &identity);

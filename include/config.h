@@ -7,7 +7,7 @@ struct DeviceConfig {
   String ssid;
   String password;
   String api_url;
-  String device_uid;
+  String hardware_id;
   String device_secret;
 };
 

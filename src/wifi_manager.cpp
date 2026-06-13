@@ -151,12 +151,6 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
       return;
     }
 
-    if (resp["claim_url"].isNull()) {
-      Serial.println("Provisioning: device already claimed — no claim session needed");
-      server.send(200, "text/html", portal_html_already_claimed());
-      return;
-    }
-
     claim_url = resp["claim_url"].as<String>();
     String claim_session_id = resp["claim_session_id"].as<String>();
     String claim_expires_at = resp["claim_expires_at"].as<String>();
@@ -237,21 +231,21 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
           Serial.println("Polling: claim status = " + status);
 
           if (status == "active") {
-            String uid = poll_doc["uid"].as<String>();
+            String hardware_id = poll_doc["hardware_id"].as<String>();
             String device_secret = poll_doc["device_secret"].as<String>();
 
-            if (uid.length() > 0 && device_secret.length() > 0) {
+            if (hardware_id.length() > 0 && device_secret.length() > 0) {
               DeviceIdentity identity = identity_load();
-              identity.uid = uid;
+              identity.hardware_id = normalize_hardware_id(hardware_id);
               identity.device_secret = device_secret;
               identity_save(identity);
 
-              cfg.device_uid = uid;
+              cfg.hardware_id = normalize_hardware_id(hardware_id);
               cfg.device_secret = device_secret;
 
-              Serial.println("Polling: uid=" + uid + " saved to identity and cfg");
+              Serial.println("Polling: hardware_id=" + hardware_id + " saved to identity and cfg");
             } else {
-              Serial.println("Polling: WARNING — active status but missing uid/device_secret in response");
+              Serial.println("Polling: WARNING — active status but missing hardware_id/device_secret in response");
             }
 
             Serial.println("Polling: device claimed — exiting provisioning");

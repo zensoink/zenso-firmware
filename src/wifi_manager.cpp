@@ -230,21 +230,31 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
           Serial.println("Polling: claim status = " + status);
 
           if (status == "active") {
-            String hardware_id = poll_doc["hardware_id"].as<String>();
+            String resp_hardware_id = poll_doc["hardware_id"].as<String>();
             String device_secret = poll_doc["device_secret"].as<String>();
 
-            if (hardware_id.length() > 0 && device_secret.length() > 0) {
-              DeviceIdentity identity = identity_load();
-              identity.hardware_id = normalize_hardware_id(hardware_id);
-              identity.device_secret = device_secret;
-              identity_save(identity);
-
-              cfg.hardware_id = normalize_hardware_id(hardware_id);
-              cfg.device_secret = device_secret;
-
-              Serial.println("Polling: hardware_id=" + hardware_id + " saved to identity and cfg");
+            if (resp_hardware_id.length() > 0) {
+              DeviceIdentity upd = identity_load();
+              upd.hardware_id = normalize_hardware_id(resp_hardware_id);
+              if (device_secret.length() > 0) {
+                upd.device_secret = device_secret;
+              }
+              identity_save(upd);
+              cfg.hardware_id = upd.hardware_id;
+              if (device_secret.length() > 0) {
+                cfg.device_secret = device_secret;
+              }
+              Serial.println("Polling: identity saved — hardware_id=" + upd.hardware_id);
             } else {
-              Serial.println("Polling: WARNING — active status but missing hardware_id/device_secret in response");
+              Serial.println("Polling: WARNING — active but no hardware_id in response, retrying next poll");
+              delay(10);
+              continue;
+            }
+
+            if (cfg.device_secret.length() == 0) {
+              Serial.println("Polling: WARNING — no device_secret yet, retrying");
+              delay(10);
+              continue;
             }
 
             Serial.println("Polling: device claimed — exiting provisioning");

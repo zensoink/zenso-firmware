@@ -7,6 +7,7 @@
 #include "provisioning_screen.h"
 #include "device_identity.h"
 #include "portal_html.h"
+#include "pins.h"
 #include <WiFiClient.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -47,7 +48,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
   Serial.println("Provisioning: starting captive portal...");
 
   String ap_password = provisioning_generate_password();
-  String device_id = device_get_id();
+  String hardware_id = device_get_id();
 
   WiFi.disconnect(true, true);
   delay(200);
@@ -62,7 +63,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
   Serial.printf("Provisioning: softAP result=%d\n", ap_ok ? 1 : 0);
   Serial.printf("Provisioning: SSID=Zenso-Setup\n");
   Serial.printf("Provisioning: Password=%s\n", ap_password.c_str());
-  Serial.println("Provisioning: Device ID=" + device_id);
+  Serial.println("Provisioning: Device ID=" + hardware_id);
   Serial.printf("Provisioning: AP IP=%s\n", WiFi.softAPIP().toString().c_str());
 
   if (!ap_ok) {
@@ -119,10 +120,9 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     http.begin(client, bootstrap_url);
     http.addHeader("Content-Type", "application/json");
 
-    String device_id = device_get_id();
+    String hardware_id = normalize_hardware_id(device_get_id());
     JsonDocument body;
-    body["device_id"] = device_id;
-    body["local_setup_token"] = device_id;
+    body["hardware_id"] = hardware_id;
     body["firmware_version"] = FIRMWARE_VERSION;
     body["hardware_info"] = JsonObject();
     JsonObject display_info = body["display_info"].to<JsonObject>();
@@ -151,15 +151,33 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
       return;
     }
 
-    if (resp["claim_url"].isNull()) {
-      Serial.println("Provisioning: device already claimed — no claim session needed");
-      server.send(200, "text/html", portal_html_already_claimed());
+    if (resp["claim_url"].isNull() || resp["claim_session_id"].isNull()) {
+      Serial.println("Provisioning: bootstrap returned no claim session — device may already be active");
+      server.send(200, "text/html", portal_html_parse_error());
+      delay(5000);
+      ESP.restart();
       return;
     }
 
+    // try snake_case first, fall back to camelCase
     claim_url = resp["claim_url"].as<String>();
+    if (claim_url.length() == 0) claim_url = resp["claimUrl"].as<String>();
+
     String claim_session_id = resp["claim_session_id"].as<String>();
+    if (claim_session_id.length() == 0) claim_session_id = resp["claimSessionId"].as<String>();
+
     String claim_expires_at = resp["claim_expires_at"].as<String>();
+    if (claim_expires_at.length() == 0) claim_expires_at = resp["claimExpiresAt"].as<String>();
+
+    Serial.println("Provisioning: claim_url=" + claim_url);
+    Serial.println("Provisioning: claim_session_id=" + claim_session_id);
+    Serial.println("Provisioning: claim_expires_at=" + claim_expires_at);
+
+    if (claim_url.length() == 0 || claim_session_id.length() == 0) {
+      Serial.println("Provisioning: bootstrap response missing claim_url or claim_session_id");
+      server.send(200, "text/html", portal_html_server_error(0));
+      return;
+    }
 
     if (claim_url.indexOf("localhost") >= 0) {
       Serial.println("Provisioning: WARNING — claim_url contains 'localhost'. Set APP_BASE_URL to a real IP in the API .env file.");
@@ -174,6 +192,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     }
 
     provisioning_screen_draw_waiting(claim_url, WiFi.localIP().toString());
+    Serial.println("Provisioning: claim URL = " + claim_url);
 
     server.send(200, "text/html",
       portal_html_success(cfg.ssid, WiFi.localIP().toString(), claim_url, claim_expires_at));
@@ -201,6 +220,8 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
   uint32_t last_poll = 0;
   const uint32_t POLL_INTERVAL_MS = 30000;
   bool claim_done = false;
+  int active_without_hardware_id_count = 0;
+  int active_without_secret_count = 0;
 
   while (!claim_done) {
     dns.processNextRequest();
@@ -214,7 +235,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
       DeviceIdentity identity = identity_load();
       if (identity.claim_session_id.length() == 0) {
         Serial.println("Polling: no claim_session_id, skipping");
-        delay(10);
+        // no delay — last_poll is already set, next poll in POLL_INTERVAL_MS
         continue;
       }
 
@@ -237,29 +258,80 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
           Serial.println("Polling: claim status = " + status);
 
           if (status == "active") {
-            String uid = poll_doc["uid"].as<String>();
+            String resp_hardware_id = poll_doc["hardware_id"].as<String>();
+            if (resp_hardware_id.length() == 0) {
+              resp_hardware_id = poll_doc["uid"].as<String>();
+            }
             String device_secret = poll_doc["device_secret"].as<String>();
 
-            if (uid.length() > 0 && device_secret.length() > 0) {
-              DeviceIdentity identity = identity_load();
-              identity.uid = uid;
-              identity.device_secret = device_secret;
-              identity_save(identity);
-
-              cfg.device_uid = uid;
-              cfg.device_secret = device_secret;
-
-              Serial.println("Polling: uid=" + uid + " saved to identity and cfg");
+            if (resp_hardware_id.length() > 0) {
+              DeviceIdentity upd = identity_load();
+              upd.hardware_id = normalize_hardware_id(resp_hardware_id);
+              if (device_secret.length() > 0) {
+                upd.device_secret = device_secret;
+              }
+              identity_save(upd);
+              {
+                DeviceIdentity verify = identity_load();
+                if (verify.hardware_id.length() == 0 || verify.hardware_id != upd.hardware_id) {
+                  Serial.println("Polling: WARNING — hardware_id not persisted, retrying next poll");
+                  continue;
+                }
+                Serial.println("Polling: identity verified on disk, hardware_id=" + verify.hardware_id);
+              }
+              cfg.hardware_id = upd.hardware_id;
+              if (device_secret.length() > 0) {
+                cfg.device_secret = device_secret;
+              }
+              active_without_hardware_id_count = 0;
+              Serial.println("Polling: identity saved — hardware_id=" + upd.hardware_id);
             } else {
-              Serial.println("Polling: WARNING — active status but missing uid/device_secret in response");
+              active_without_hardware_id_count++;
+              if (active_without_hardware_id_count >= 3) {
+                Serial.println("Polling: active but no hardware_id after 3 polls — exiting with partial claim");
+                break;
+              }
+              Serial.println("Polling: WARNING — active but no hardware_id in response, retrying (" +
+                String(active_without_hardware_id_count) + "/3)");
+              continue;
             }
+
+            if (cfg.device_secret.length() == 0) {
+              active_without_secret_count++;
+              if (active_without_secret_count >= 3) {
+                Serial.println("Polling: active but no device_secret after 3 polls — exiting, secret rotation needed");
+                break; // exit provisioning loop, device is claimed but needs secret rotation
+              }
+              Serial.println("Polling: WARNING — no device_secret yet, retrying (" +
+                String(active_without_secret_count) + "/3)");
+              continue;
+            }
+            active_without_secret_count = 0;
 
             Serial.println("Polling: device claimed — exiting provisioning");
             claim_done = true;
           } else if (status == "expired") {
             Serial.println("Polling: claim expired — showing expired screen");
             provisioning_screen_draw_claim_expired();
-            while (true) { delay(1000); }
+            Serial.println("Expired: hold KEY1 for 3s to restart provisioning");
+            while (true) {
+              if (digitalRead(KEY1_PIN) == LOW) {
+                uint32_t press_start = millis();
+                bool held = true;
+                while (millis() - press_start < 3000) {
+                  delay(100);
+                  if (digitalRead(KEY1_PIN) != LOW) {
+                    held = false;
+                    break;
+                  }
+                }
+                if (held) {
+                  Serial.println("Expired: KEY1 held 3s — restarting");
+                  ESP.restart();
+                }
+              }
+              delay(100);
+            }
           }
         }
       }

@@ -77,20 +77,19 @@ static inline String portal_html_parse_error() {
     "<button onclick=\"window.location.href='/'\">Go Back</button>");
 }
 
-static inline String portal_html_already_claimed() {
-  return _base_html("Device Ready",
-    "<h2>Device Already Claimed</h2>"
-    "<p>This device is already registered and linked to an account.</p>"
-    "<p>It will begin displaying content after restarting.</p>"
-    "<button onclick=\"window.location.href='/'\">Go Back</button>");
-}
-
 // --- Success page (different styling from error pages) ---
 
 static inline String portal_html_success(const String& ssid, const String& ip,
                                          const String& claim_url,
                                          const String& claim_expires_at) {
-  String expires_display = "Valid until " + claim_expires_at.substring(11, 16) + " UTC";
+  String expires_display;
+  if (claim_expires_at.length() >= 16) {
+    expires_display = "Valid until " + claim_expires_at.substring(11, 16) + " UTC";
+  } else if (claim_expires_at.length() > 0) {
+    expires_display = "Valid until " + claim_expires_at;
+  } else {
+    expires_display = "Expires soon";
+  }
   return "<!DOCTYPE html><html><head>"
          "<meta charset=\"UTF-8\">"
          "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"

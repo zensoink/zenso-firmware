@@ -83,7 +83,7 @@ void provisioning_screen_draw(
 
     display.setCursor(RIGHT_X, 80);
     display.setTextSize(3);
-    display.print("Setup Mode");
+    display.print("Welcome in Zenso!");
 
     display.setCursor(RIGHT_X, 140);
     display.setTextSize(2);
@@ -174,6 +174,10 @@ void provisioning_screen_draw_waiting(const String &claim_url, const String &wif
     display.setTextSize(2);
     display.print("to claim this device");
 
+    display.setCursor(RIGHT_X, 290);
+    display.setTextSize(1);
+    display.print(claim_url);
+
     display.setCursor(BRANDING_X, BRANDING_Y);
     display.setTextSize(1);
     display.print("zenso.ink");
@@ -219,7 +223,7 @@ void provisioning_screen_draw_claim_expired() {
   display.powerOff();
 }
 
-void provisioning_screen_draw_no_content(const String &device_uid) {
+void provisioning_screen_draw_no_content(const String &hardware_id) {
   display.firstPage();
   do {
     display.fillScreen(GxEPD_WHITE);
@@ -245,7 +249,7 @@ void provisioning_screen_draw_no_content(const String &device_uid) {
     display.setCursor(LX, Y_BODY4);
     display.setTextSize(1);
     display.print("Device ID: ");
-    display.print(device_uid);
+    display.print(hardware_id);
 
     display.setCursor(BRANDING_X, BRANDING_Y);
     display.setTextSize(1);

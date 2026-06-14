@@ -10,9 +10,9 @@ FetchResult http_fetch_display(const DeviceConfig &cfg) {
   // Validate config
   String missing;
   if (cfg.api_url.length() == 0) missing += "api_url";
-  if (cfg.device_uid.length() == 0) {
+  if (cfg.hardware_id.length() == 0) {
     if (missing.length() > 0) missing += ", ";
-    missing += "device_uid";
+    missing += "hardware_id";
   }
   if (cfg.device_secret.length() == 0) {
     if (missing.length() > 0) missing += ", ";
@@ -32,7 +32,7 @@ FetchResult http_fetch_display(const DeviceConfig &cfg) {
   http.addHeader("Content-Type", "application/json");
 
   JsonDocument login_doc;
-  login_doc["uid"] = cfg.device_uid;
+  login_doc["hardware_id"] = cfg.hardware_id;
   login_doc["secret"] = cfg.device_secret;
   String login_body;
   serializeJson(login_doc, login_body);
@@ -74,7 +74,7 @@ FetchResult http_fetch_display(const DeviceConfig &cfg) {
   }
 
   // -- Fetch display --
-  String display_url = cfg.api_url + "/devices/" + cfg.device_uid + "/display";
+  String display_url = cfg.api_url + "/devices/display";
   http.begin(client, display_url);
   http.addHeader("Authorization", "Bearer " + token);
   if (etag.length() > 0) {

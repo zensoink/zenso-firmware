@@ -173,12 +173,12 @@ void setup()
 
   DeviceIdentity identity = identity_load();
 
-  if (identity.uid.length() > 0 && identity.device_secret.length() > 0) {
-    cfg.device_uid = identity.uid;
+  if (identity.hardware_id.length() > 0 && identity.device_secret.length() > 0) {
+    cfg.hardware_id = identity.hardware_id;
     cfg.device_secret = identity.device_secret;
-    Serial.println("Setup: identity loaded, uid=" + identity.uid);
+    Serial.println("Setup: identity loaded, hardware_id=" + identity.hardware_id);
   } else {
-    Serial.println("Setup: no uid/secret yet — device not claimed");
+    Serial.println("Setup: no hardware_id/secret yet — device not claimed");
   }
 
   // KEY1 hold detection — force provisioning if held for 3s
@@ -196,14 +196,23 @@ void setup()
   }
 
   if (force_provisioning) {
-    Serial.println("Setup: KEY1 held — forcing provisioning mode");
+    Serial.println("Setup: KEY1 held — wiping identity for fresh claim");
+    DeviceIdentity blank;
+    blank.hardware_id = device_get_id();
+    blank.bootstrap_secret = blank.hardware_id;
+    identity_save(blank);
+    cfg.hardware_id = "";
+    cfg.device_secret = "";
     wifi_start_provisioning(cfg);
     {
       DeviceIdentity post_identity = identity_load();
-      if (post_identity.uid.length() > 0 && post_identity.device_secret.length() > 0) {
-        cfg.device_uid = post_identity.uid;
+      if (post_identity.hardware_id.length() > 0 && post_identity.device_secret.length() > 0) {
+        cfg.hardware_id = post_identity.hardware_id;
         cfg.device_secret = post_identity.device_secret;
-        Serial.println("Setup: post-provisioning identity loaded, uid=" + post_identity.uid);
+        Serial.println("Setup: post-provisioning identity loaded, hardware_id=" + post_identity.hardware_id);
+      } else {
+        Serial.println("Setup: provisioning incomplete — restarting");
+        ESP.restart();
       }
     }
   } else if (!config_is_provisioned(cfg)) {
@@ -211,10 +220,10 @@ void setup()
     wifi_start_provisioning(cfg);
     {
       DeviceIdentity post_identity = identity_load();
-      if (post_identity.uid.length() > 0 && post_identity.device_secret.length() > 0) {
-        cfg.device_uid = post_identity.uid;
+      if (post_identity.hardware_id.length() > 0 && post_identity.device_secret.length() > 0) {
+        cfg.hardware_id = post_identity.hardware_id;
         cfg.device_secret = post_identity.device_secret;
-        Serial.println("Setup: post-provisioning identity loaded, uid=" + post_identity.uid);
+        Serial.println("Setup: post-provisioning identity loaded, hardware_id=" + post_identity.hardware_id);
       }
     }
   } else if (!wifi_connect(cfg)) {
@@ -222,10 +231,10 @@ void setup()
     wifi_start_provisioning(cfg);
     {
       DeviceIdentity post_identity = identity_load();
-      if (post_identity.uid.length() > 0 && post_identity.device_secret.length() > 0) {
-        cfg.device_uid = post_identity.uid;
+      if (post_identity.hardware_id.length() > 0 && post_identity.device_secret.length() > 0) {
+        cfg.hardware_id = post_identity.hardware_id;
         cfg.device_secret = post_identity.device_secret;
-        Serial.println("Setup: post-provisioning identity loaded, uid=" + post_identity.uid);
+        Serial.println("Setup: post-provisioning identity loaded, hardware_id=" + post_identity.hardware_id);
       }
     }
   }
@@ -242,15 +251,15 @@ void setup()
 
   if (fetch_result == FetchResult::NO_CONTENT) {
     Serial.println("Setup: no screen assigned — drawing placeholder");
-    provisioning_screen_draw_no_content(cfg.device_uid);
+    provisioning_screen_draw_no_content(device_get_id());
   } else if (fetch_result == FetchResult::ERROR) {
     Serial.println("Setup: fetch error — trying cached /display.raw");
     if (!drawRAW("/display.raw")) {
-      provisioning_screen_draw_no_content(cfg.device_uid);
+      provisioning_screen_draw_no_content(device_get_id());
     }
   } else {
     if (!drawRAW("/display.raw")) {
-      provisioning_screen_draw_no_content(cfg.device_uid);
+      provisioning_screen_draw_no_content(device_get_id());
     }
   }
 

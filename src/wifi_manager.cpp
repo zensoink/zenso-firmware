@@ -150,9 +150,25 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
       return;
     }
 
+    // try snake_case first, fall back to camelCase
     claim_url = resp["claim_url"].as<String>();
+    if (claim_url.length() == 0) claim_url = resp["claimUrl"].as<String>();
+
     String claim_session_id = resp["claim_session_id"].as<String>();
+    if (claim_session_id.length() == 0) claim_session_id = resp["claimSessionId"].as<String>();
+
     String claim_expires_at = resp["claim_expires_at"].as<String>();
+    if (claim_expires_at.length() == 0) claim_expires_at = resp["claimExpiresAt"].as<String>();
+
+    Serial.println("Provisioning: claim_url=" + claim_url);
+    Serial.println("Provisioning: claim_session_id=" + claim_session_id);
+    Serial.println("Provisioning: claim_expires_at=" + claim_expires_at);
+
+    if (claim_url.length() == 0 || claim_session_id.length() == 0) {
+      Serial.println("Provisioning: bootstrap response missing claim_url or claim_session_id");
+      server.send(200, "text/html", portal_html_server_error(0));
+      return;
+    }
 
     if (claim_url.indexOf("localhost") >= 0) {
       Serial.println("Provisioning: WARNING — claim_url contains 'localhost'. Set APP_BASE_URL to a real IP in the API .env file.");
@@ -167,6 +183,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     }
 
     provisioning_screen_draw_waiting(claim_url, WiFi.localIP().toString());
+    Serial.println("Provisioning: claim URL = " + claim_url);
 
     server.send(200, "text/html",
       portal_html_success(cfg.ssid, WiFi.localIP().toString(), claim_url, claim_expires_at));
@@ -207,7 +224,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
       DeviceIdentity identity = identity_load();
       if (identity.claim_session_id.length() == 0) {
         Serial.println("Polling: no claim_session_id, skipping");
-        delay(POLL_INTERVAL_MS);
+        // no delay — last_poll is already set, next poll in POLL_INTERVAL_MS
         continue;
       }
 
@@ -247,13 +264,13 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
               Serial.println("Polling: identity saved — hardware_id=" + upd.hardware_id);
             } else {
               Serial.println("Polling: WARNING — active but no hardware_id in response, retrying next poll");
-              delay(POLL_INTERVAL_MS);
+              // no delay — last_poll is already set, next poll in POLL_INTERVAL_MS
               continue;
             }
 
             if (cfg.device_secret.length() == 0) {
               Serial.println("Polling: WARNING — no device_secret yet, retrying next poll");
-              delay(POLL_INTERVAL_MS);
+              // no delay — last_poll is already set, next poll in POLL_INTERVAL_MS
               continue;
             }
 

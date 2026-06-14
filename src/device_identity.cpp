@@ -30,9 +30,13 @@ DeviceIdentity identity_load() {
   identity.hardware_id = device_get_id();
   identity.bootstrap_secret = identity.hardware_id;
 
+  if (!LittleFS.exists("/identity.json")) {
+    Serial.println("Identity: /identity.json not found, using defaults");
+    return identity;
+  }
   File file = LittleFS.open("/identity.json", "r");
   if (!file) {
-    Serial.println("Identity: /identity.json not found, using defaults");
+    Serial.println("Identity: failed to open /identity.json");
     return identity;
   }
 

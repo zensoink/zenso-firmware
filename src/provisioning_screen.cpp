@@ -174,6 +174,10 @@ void provisioning_screen_draw_waiting(const String &claim_url, const String &wif
     display.setTextSize(2);
     display.print("to claim this device");
 
+    display.setCursor(RIGHT_X, 290);
+    display.setTextSize(1);
+    display.print(claim_url);
+
     display.setCursor(BRANDING_X, BRANDING_Y);
     display.setTextSize(1);
     display.print("zenso.ink");

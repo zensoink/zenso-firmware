@@ -4,9 +4,13 @@
 #include "config.h"
 
 bool config_load(DeviceConfig &cfg) {
+  if (!LittleFS.exists("/config.json")) {
+    Serial.println("Config: /config.json not found");
+    return false;
+  }
   File file = LittleFS.open("/config.json", "r");
   if (!file) {
-    Serial.println("Config: /config.json not found");
+    Serial.println("Config: failed to open /config.json");
     return false;
   }
 

@@ -82,7 +82,14 @@ static inline String portal_html_parse_error() {
 static inline String portal_html_success(const String& ssid, const String& ip,
                                          const String& claim_url,
                                          const String& claim_expires_at) {
-  String expires_display = "Valid until " + claim_expires_at.substring(11, 16) + " UTC";
+  String expires_display;
+  if (claim_expires_at.length() >= 16) {
+    expires_display = "Valid until " + claim_expires_at.substring(11, 16) + " UTC";
+  } else if (claim_expires_at.length() > 0) {
+    expires_display = "Valid until " + claim_expires_at;
+  } else {
+    expires_display = "Expires soon";
+  }
   return "<!DOCTYPE html><html><head>"
          "<meta charset=\"UTF-8\">"
          "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"

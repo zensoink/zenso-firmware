@@ -83,7 +83,7 @@ void provisioning_screen_draw(
 
     display.setCursor(RIGHT_X, 80);
     display.setTextSize(3);
-    display.print("Setup Mode");
+    display.print("Welcome in Zenso!");
 
     display.setCursor(RIGHT_X, 140);
     display.setTextSize(2);

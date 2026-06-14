@@ -7,6 +7,7 @@
 #include "provisioning_screen.h"
 #include "device_identity.h"
 #include "portal_html.h"
+#include "pins.h"
 #include <WiFiClient.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -150,6 +151,14 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
       return;
     }
 
+    if (resp["claim_url"].isNull() || resp["claim_session_id"].isNull()) {
+      Serial.println("Provisioning: bootstrap returned no claim session — device may already be active");
+      server.send(200, "text/html", portal_html_parse_error());
+      delay(5000);
+      ESP.restart();
+      return;
+    }
+
     // try snake_case first, fall back to camelCase
     claim_url = resp["claim_url"].as<String>();
     if (claim_url.length() == 0) claim_url = resp["claimUrl"].as<String>();
@@ -211,6 +220,8 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
   uint32_t last_poll = 0;
   const uint32_t POLL_INTERVAL_MS = 30000;
   bool claim_done = false;
+  int active_without_hardware_id_count = 0;
+  int active_without_secret_count = 0;
 
   while (!claim_done) {
     dns.processNextRequest();
@@ -248,6 +259,9 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
 
           if (status == "active") {
             String resp_hardware_id = poll_doc["hardware_id"].as<String>();
+            if (resp_hardware_id.length() == 0) {
+              resp_hardware_id = poll_doc["uid"].as<String>();
+            }
             String device_secret = poll_doc["device_secret"].as<String>();
 
             if (resp_hardware_id.length() > 0) {
@@ -257,29 +271,67 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
                 upd.device_secret = device_secret;
               }
               identity_save(upd);
+              {
+                DeviceIdentity verify = identity_load();
+                if (verify.hardware_id.length() == 0 || verify.hardware_id != upd.hardware_id) {
+                  Serial.println("Polling: WARNING — hardware_id not persisted, retrying next poll");
+                  continue;
+                }
+                Serial.println("Polling: identity verified on disk, hardware_id=" + verify.hardware_id);
+              }
               cfg.hardware_id = upd.hardware_id;
               if (device_secret.length() > 0) {
                 cfg.device_secret = device_secret;
               }
+              active_without_hardware_id_count = 0;
               Serial.println("Polling: identity saved — hardware_id=" + upd.hardware_id);
             } else {
-              Serial.println("Polling: WARNING — active but no hardware_id in response, retrying next poll");
-              // no delay — last_poll is already set, next poll in POLL_INTERVAL_MS
+              active_without_hardware_id_count++;
+              if (active_without_hardware_id_count >= 3) {
+                Serial.println("Polling: active but no hardware_id after 3 polls — exiting with partial claim");
+                break;
+              }
+              Serial.println("Polling: WARNING — active but no hardware_id in response, retrying (" +
+                String(active_without_hardware_id_count) + "/3)");
               continue;
             }
 
             if (cfg.device_secret.length() == 0) {
-              Serial.println("Polling: WARNING — no device_secret yet, retrying next poll");
-              // no delay — last_poll is already set, next poll in POLL_INTERVAL_MS
+              active_without_secret_count++;
+              if (active_without_secret_count >= 3) {
+                Serial.println("Polling: active but no device_secret after 3 polls — exiting, secret rotation needed");
+                break; // exit provisioning loop, device is claimed but needs secret rotation
+              }
+              Serial.println("Polling: WARNING — no device_secret yet, retrying (" +
+                String(active_without_secret_count) + "/3)");
               continue;
             }
+            active_without_secret_count = 0;
 
             Serial.println("Polling: device claimed — exiting provisioning");
             claim_done = true;
           } else if (status == "expired") {
             Serial.println("Polling: claim expired — showing expired screen");
             provisioning_screen_draw_claim_expired();
-            while (true) { delay(1000); }
+            Serial.println("Expired: hold KEY1 for 3s to restart provisioning");
+            while (true) {
+              if (digitalRead(KEY1_PIN) == LOW) {
+                uint32_t press_start = millis();
+                bool held = true;
+                while (millis() - press_start < 3000) {
+                  delay(100);
+                  if (digitalRead(KEY1_PIN) != LOW) {
+                    held = false;
+                    break;
+                  }
+                }
+                if (held) {
+                  Serial.println("Expired: KEY1 held 3s — restarting");
+                  ESP.restart();
+                }
+              }
+              delay(100);
+            }
           }
         }
       }

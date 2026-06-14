@@ -204,8 +204,17 @@ void setup()
     cfg.hardware_id = "";
     cfg.device_secret = "";
     wifi_start_provisioning(cfg);
-    Serial.println("Setup: provisioning done — restarting");
-    ESP.restart();
+    {
+      DeviceIdentity post_identity = identity_load();
+      if (post_identity.hardware_id.length() > 0 && post_identity.device_secret.length() > 0) {
+        cfg.hardware_id = post_identity.hardware_id;
+        cfg.device_secret = post_identity.device_secret;
+        Serial.println("Setup: post-provisioning identity loaded, hardware_id=" + post_identity.hardware_id);
+      } else {
+        Serial.println("Setup: provisioning incomplete — restarting");
+        ESP.restart();
+      }
+    }
   } else if (!config_is_provisioned(cfg)) {
     Serial.println("Setup: no config found — starting provisioning mode");
     wifi_start_provisioning(cfg);

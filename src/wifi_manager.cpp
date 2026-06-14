@@ -207,7 +207,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
       DeviceIdentity identity = identity_load();
       if (identity.claim_session_id.length() == 0) {
         Serial.println("Polling: no claim_session_id, skipping");
-        delay(10);
+        delay(POLL_INTERVAL_MS);
         continue;
       }
 
@@ -247,13 +247,13 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
               Serial.println("Polling: identity saved — hardware_id=" + upd.hardware_id);
             } else {
               Serial.println("Polling: WARNING — active but no hardware_id in response, retrying next poll");
-              delay(10);
+              delay(POLL_INTERVAL_MS);
               continue;
             }
 
             if (cfg.device_secret.length() == 0) {
-              Serial.println("Polling: WARNING — no device_secret yet, retrying");
-              delay(10);
+              Serial.println("Polling: WARNING — no device_secret yet, retrying next poll");
+              delay(POLL_INTERVAL_MS);
               continue;
             }
 

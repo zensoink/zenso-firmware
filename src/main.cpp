@@ -204,7 +204,8 @@ void setup()
     cfg.hardware_id = "";
     cfg.device_secret = "";
     wifi_start_provisioning(cfg);
-    return;
+    Serial.println("Setup: provisioning done — restarting");
+    ESP.restart();
   } else if (!config_is_provisioned(cfg)) {
     Serial.println("Setup: no config found — starting provisioning mode");
     wifi_start_provisioning(cfg);
@@ -241,15 +242,15 @@ void setup()
 
   if (fetch_result == FetchResult::NO_CONTENT) {
     Serial.println("Setup: no screen assigned — drawing placeholder");
-    provisioning_screen_draw_no_content(cfg.hardware_id);
+    provisioning_screen_draw_no_content(device_get_id());
   } else if (fetch_result == FetchResult::ERROR) {
     Serial.println("Setup: fetch error — trying cached /display.raw");
     if (!drawRAW("/display.raw")) {
-      provisioning_screen_draw_no_content(cfg.hardware_id);
+      provisioning_screen_draw_no_content(device_get_id());
     }
   } else {
     if (!drawRAW("/display.raw")) {
-      provisioning_screen_draw_no_content(cfg.hardware_id);
+      provisioning_screen_draw_no_content(device_get_id());
     }
   }
 

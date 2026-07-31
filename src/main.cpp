@@ -36,6 +36,10 @@ static const uint16_t epdPalette[7] = {
 };
 
 static DeviceConfig cfg;
+static String device_token;
+static bool showing_content = false;
+static unsigned long last_check_in_ms = 0;
+static unsigned long refresh_rate_ms = 60000;
 
 bool drawRAW(const char *filename)
 {
@@ -152,6 +156,30 @@ void clearToWhite()
   Serial.println("Screen cleared");
 }
 
+// ponytail: display helpers wrap init+draw+powerOff in one call
+static void display_init_and_draw_raw() {
+  SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
+  display.init(115200, true, 2, false);
+  display.setRotation(0);
+  display.setFullWindow();
+  if (drawRAW("/display.raw")) {
+    showing_content = true;
+  } else {
+    provisioning_screen_draw_no_content(cfg.hardware_id);
+    showing_content = false;
+  }
+  if (showing_content) display.powerOff();
+}
+
+static void display_init_and_draw_no_content() {
+  SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
+  display.init(115200, true, 2, false);
+  display.setRotation(0);
+  display.setFullWindow();
+  provisioning_screen_draw_no_content(cfg.hardware_id);
+  showing_content = false;
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -241,34 +269,51 @@ void setup()
 
   Serial.println("Setup: WiFi connected, continuing...");
 
-  FetchResult fetch_result = http_fetch_display(cfg);
+  // First fetch: login + check-in + display
+  if (device_login(cfg, device_token)) {
+    DeviceStatus status;
+    FetchResult ci = http_check_in(cfg, device_token, status);
+    if (ci == FetchResult::OK) {
+      refresh_rate_ms = (unsigned long)status.refresh_rate * 1000UL;
 
-  SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
-
-  display.init(115200, true, 2, false);
-  display.setRotation(0);
-  display.setFullWindow();
-
-  if (fetch_result == FetchResult::NO_CONTENT) {
-    Serial.println("Setup: no screen assigned — drawing placeholder");
-    provisioning_screen_draw_no_content(device_get_id());
-  } else if (fetch_result == FetchResult::ERROR) {
-    Serial.println("Setup: fetch error — trying cached /display.raw");
-    if (!drawRAW("/display.raw")) {
-      provisioning_screen_draw_no_content(device_get_id());
+      if (status.has_image && status.content_changed) {
+        FetchResult fr = http_fetch_display_with_token(cfg, device_token);
+        if (fr == FetchResult::OK) {
+          display_init_and_draw_raw();
+        } else if (fr == FetchResult::NOT_MODIFIED) {
+          display_init_and_draw_raw();
+        } else {
+          display_init_and_draw_no_content();
+        }
+      } else if (status.has_image) {
+        // Content already on display (cached from previous boot)
+        display_init_and_draw_raw();
+      } else {
+        display_init_and_draw_no_content();
+      }
+    } else {
+      // Check-in failed — try direct fetch as fallback
+      FetchResult fr = http_fetch_display_with_token(cfg, device_token);
+      if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
+        display_init_and_draw_raw();
+      } else if (fr == FetchResult::NO_CONTENT) {
+        display_init_and_draw_no_content();
+      } else {
+        display_init_and_draw_no_content();
+      }
     }
   } else {
-    if (!drawRAW("/display.raw")) {
-      provisioning_screen_draw_no_content(device_get_id());
-    }
+    // Login failed — can't get token
+    display_init_and_draw_no_content();
   }
 
-  display.powerOff();
+  last_check_in_ms = millis();
   Serial.println("===== DONE =====");
 }
 
 void loop()
 {
+  // KEY1 pressed — clear screen
   if (digitalRead(KEY1_PIN) == LOW)
   {
     delay(50);
@@ -277,9 +322,44 @@ void loop()
     clearToWhite();
   }
 
+  // Serial developer menu
   if (Serial.available() > 0)
   {
     handle_dev_command(Serial.read(), cfg);
+  }
+
+  // Periodic check-in + fetch cycle
+  if (millis() - last_check_in_ms >= refresh_rate_ms)
+  {
+    last_check_in_ms = millis();
+
+    // Refresh token if missing
+    if (device_token.length() == 0) {
+      if (!device_login(cfg, device_token)) {
+        return;
+      }
+    }
+
+    DeviceStatus status;
+    FetchResult cr = http_check_in(cfg, device_token, status);
+
+    if (cr == FetchResult::ERROR) {
+      device_token = "";
+      return;
+    }
+
+    refresh_rate_ms = (unsigned long)status.refresh_rate * 1000UL;
+
+    if (status.has_image && status.content_changed) {
+      FetchResult fr = http_fetch_display_with_token(cfg, device_token);
+      if (fr == FetchResult::OK) {
+        display_init_and_draw_raw();
+      } else if (fr == FetchResult::ERROR) {
+        device_token = "";
+      }
+    } else if (!status.has_image && showing_content) {
+      display_init_and_draw_no_content();
+    }
   }
 
   delay(10);

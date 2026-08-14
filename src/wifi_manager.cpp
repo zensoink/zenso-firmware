@@ -266,25 +266,15 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
 
             if (resp_hardware_id.length() > 0) {
               DeviceIdentity upd = identity_load();
-              upd.hardware_id = normalize_hardware_id(resp_hardware_id);
               if (device_secret.length() > 0) {
                 upd.device_secret = device_secret;
               }
               identity_save(upd);
-              {
-                DeviceIdentity verify = identity_load();
-                if (verify.hardware_id.length() == 0 || verify.hardware_id != upd.hardware_id) {
-                  Serial.println("Polling: WARNING — hardware_id not persisted, retrying next poll");
-                  continue;
-                }
-                Serial.println("Polling: identity verified on disk, hardware_id=" + verify.hardware_id);
-              }
-              cfg.hardware_id = upd.hardware_id;
               if (device_secret.length() > 0) {
                 cfg.device_secret = device_secret;
               }
               active_without_hardware_id_count = 0;
-              Serial.println("Polling: identity saved — hardware_id=" + upd.hardware_id);
+              Serial.println("Polling: identity saved");
             } else {
               active_without_hardware_id_count++;
               if (active_without_hardware_id_count >= 3) {

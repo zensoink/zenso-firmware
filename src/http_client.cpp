@@ -4,10 +4,13 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include "config.h"
+#include "device_identity.h"
 #include "http_client.h"
+#include "version.h"
 
-FetchResult http_fetch_display(const DeviceConfig &cfg) {
-  // Validate config
+// ── Helpers ──
+
+static bool validate_config(const DeviceConfig &cfg) {
   String missing;
   if (cfg.api_url.length() == 0) missing += "api_url";
   if (cfg.hardware_id.length() == 0) {
@@ -20,19 +23,25 @@ FetchResult http_fetch_display(const DeviceConfig &cfg) {
   }
   if (missing.length() > 0) {
     Serial.printf("[HttpClient] Missing required config: %s\n", missing.c_str());
-    return FetchResult::ERROR;
+    return false;
   }
+  return true;
+}
+
+// ── Login ──
+
+bool device_login(const DeviceConfig &cfg, String &out_token) {
+  if (!validate_config(cfg)) return false;
 
   WiFiClient client;
   HTTPClient http;
 
-  // -- Device login --
   String login_url = cfg.api_url + "/auth/device/login";
   http.begin(client, login_url);
   http.addHeader("Content-Type", "application/json");
 
   JsonDocument login_doc;
-  login_doc["hardware_id"] = cfg.hardware_id;
+  login_doc["hardware_id"] = device_get_id();
   login_doc["secret"] = cfg.device_secret;
   String login_body;
   serializeJson(login_doc, login_body);
@@ -41,7 +50,7 @@ FetchResult http_fetch_display(const DeviceConfig &cfg) {
   if (login_code != 200) {
     Serial.printf("[HttpClient] Login failed: HTTP %d\n", login_code);
     http.end();
-    return FetchResult::ERROR;
+    return false;
   }
 
   String login_resp = http.getString();
@@ -51,17 +60,83 @@ FetchResult http_fetch_display(const DeviceConfig &cfg) {
   DeserializationError err = deserializeJson(token_doc, login_resp);
   if (err) {
     Serial.printf("[HttpClient] Login JSON parse error: %s\n", err.c_str());
-    return FetchResult::ERROR;
+    return false;
   }
 
-  String token = token_doc["accessToken"].as<String>();
-  if (token.length() == 0) {
+  out_token = token_doc["accessToken"].as<String>();
+  if (out_token.length() == 0) {
     Serial.printf("[HttpClient] Login response missing accessToken\n");
+    return false;
+  }
+  Serial.printf("[HttpClient] Login OK, token=%d chars\n", out_token.length());
+  return true;
+}
+
+// ── Check-in ──
+
+FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceStatus &out_status) {
+  if (!validate_config(cfg)) return FetchResult::ERROR;
+
+  // Defaults
+  out_status = { -1, 300, false, false };
+
+  WiFiClient client;
+  HTTPClient http;
+
+  String url = cfg.api_url + "/devices/check-in";
+  http.begin(client, url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("Authorization", "Bearer " + token);
+
+  JsonDocument body_doc;
+  body_doc["firmwareVersion"] = FIRMWARE_VERSION;
+  String body;
+  serializeJson(body_doc, body);
+
+  int code = http.POST(body);
+  if (code == 401) {
+    Serial.println("[HttpClient] Check-in 401 — token expired");
+    http.end();
     return FetchResult::ERROR;
   }
-  Serial.printf("[HttpClient] Login OK, token=%d chars\n", token.length());
+  if (code < 200 || code > 299) {
+    Serial.printf("[HttpClient] Check-in failed: HTTP %d\n", code);
+    http.end();
+    return FetchResult::ERROR;
+  }
 
-  // -- Load saved ETag --
+  String resp = http.getString();
+  http.end();
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, resp);
+  if (err) {
+    Serial.printf("[HttpClient] Check-in JSON parse error: %s\n", err.c_str());
+    return FetchResult::ERROR;
+  }
+
+  out_status.screen_id = doc["screenId"].is<int>() ? doc["screenId"].as<int>() : -1;
+  out_status.refresh_rate = doc["refreshRate"].as<int>();
+  out_status.has_image = doc["hasImage"].as<bool>();
+  out_status.content_changed = doc["contentChanged"].as<bool>();
+
+  if (out_status.refresh_rate <= 0) out_status.refresh_rate = 300;
+
+  Serial.printf("[HttpClient] Check-in OK: screenId=%d refreshRate=%d hasImage=%d contentChanged=%d\n",
+                out_status.screen_id, out_status.refresh_rate,
+                out_status.has_image, out_status.content_changed);
+  return FetchResult::OK;
+}
+
+// ── Fetch display (with token) ──
+
+FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String &token) {
+  if (!validate_config(cfg)) return FetchResult::ERROR;
+
+  WiFiClient client;
+  HTTPClient http;
+
+  // Load saved ETag
   String etag;
   File etag_file = LittleFS.open("/display.etag", "r");
   if (etag_file) {
@@ -73,7 +148,6 @@ FetchResult http_fetch_display(const DeviceConfig &cfg) {
     }
   }
 
-  // -- Fetch display --
   String display_url = cfg.api_url + "/devices/display";
   http.begin(client, display_url);
   http.addHeader("Authorization", "Bearer " + token);
@@ -147,4 +221,12 @@ FetchResult http_fetch_display(const DeviceConfig &cfg) {
 
   http.end();
   return FetchResult::OK;
+}
+
+// ── Legacy wrapper (login + fetch, used during initial boot) ──
+
+FetchResult http_fetch_display(const DeviceConfig &cfg) {
+  String token;
+  if (!device_login(cfg, token)) return FetchResult::ERROR;
+  return http_fetch_display_with_token(cfg, token);
 }

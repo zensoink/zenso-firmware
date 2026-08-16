@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <WiFi.h>
 #include <SPI.h>
 #include <LittleFS.h>
 #include <GxEPD2_7C.h>
@@ -180,6 +181,46 @@ static void display_init_and_draw_no_content() {
   showing_content = false;
 }
 
+static void initial_fetch_and_display() {
+  if (!device_login(cfg, device_token)) {
+    display_init_and_draw_no_content();
+    return;
+  }
+
+  DeviceStatus status;
+  FetchResult ci = http_check_in(cfg, device_token, status);
+  if (ci == FetchResult::OK) {
+    refresh_rate_ms = (unsigned long)status.refresh_rate * 1000UL;
+  }
+
+  if (ci == FetchResult::OK && status.has_image && !status.content_changed) {
+    display_init_and_draw_raw();
+    return;
+  }
+
+  if (ci == FetchResult::OK && status.has_image && status.content_changed) {
+    FetchResult fr = http_fetch_display_with_token(cfg, device_token);
+    if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
+      display_init_and_draw_raw();
+    } else {
+      display_init_and_draw_no_content();
+    }
+    return;
+  }
+
+  if (ci != FetchResult::OK) {
+    FetchResult fr = http_fetch_display_with_token(cfg, device_token);
+    if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
+      display_init_and_draw_raw();
+    } else {
+      display_init_and_draw_no_content();
+    }
+    return;
+  }
+
+  display_init_and_draw_no_content();
+}
+
 void setup()
 {
   Serial.begin(115200);
@@ -269,43 +310,22 @@ void setup()
 
   Serial.println("Setup: WiFi connected, continuing...");
 
-  // First fetch: login + check-in + display
-  if (device_login(cfg, device_token)) {
-    DeviceStatus status;
-    FetchResult ci = http_check_in(cfg, device_token, status);
-    if (ci == FetchResult::OK) {
-      refresh_rate_ms = (unsigned long)status.refresh_rate * 1000UL;
-
-      if (status.has_image && status.content_changed) {
-        FetchResult fr = http_fetch_display_with_token(cfg, device_token);
-        if (fr == FetchResult::OK) {
-          display_init_and_draw_raw();
-        } else if (fr == FetchResult::NOT_MODIFIED) {
-          display_init_and_draw_raw();
-        } else {
-          display_init_and_draw_no_content();
-        }
-      } else if (status.has_image) {
-        // Content already on display (cached from previous boot)
-        display_init_and_draw_raw();
-      } else {
-        display_init_and_draw_no_content();
-      }
-    } else {
-      // Check-in failed — try direct fetch as fallback
-      FetchResult fr = http_fetch_display_with_token(cfg, device_token);
-      if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
-        display_init_and_draw_raw();
-      } else if (fr == FetchResult::NO_CONTENT) {
-        display_init_and_draw_no_content();
-      } else {
-        display_init_and_draw_no_content();
+  // Verify WiFi is still up before first fetch
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Setup: WiFi lost after connect, reconnecting...");
+    if (!wifi_connect(cfg)) {
+      Serial.println("Setup: WiFi reconnect failed — starting provisioning mode");
+      wifi_start_provisioning(cfg);
+      DeviceIdentity post_identity = identity_load();
+      if (post_identity.hardware_id.length() > 0 && post_identity.device_secret.length() > 0) {
+        cfg.hardware_id = post_identity.hardware_id;
+        cfg.device_secret = post_identity.device_secret;
       }
     }
-  } else {
-    // Login failed — can't get token
-    display_init_and_draw_no_content();
   }
+
+  // First fetch: login + check-in + display
+  initial_fetch_and_display();
 
   last_check_in_ms = millis();
   Serial.println("===== DONE =====");
@@ -328,38 +348,48 @@ void loop()
     handle_dev_command(Serial.read(), cfg);
   }
 
-  // Periodic check-in + fetch cycle
-  if (millis() - last_check_in_ms >= refresh_rate_ms)
+  // Only run periodic cycle when interval elapsed
+  if (millis() - last_check_in_ms < refresh_rate_ms)
   {
-    last_check_in_ms = millis();
+    delay(10);
+    return;
+  }
 
-    // Refresh token if missing
-    if (device_token.length() == 0) {
-      if (!device_login(cfg, device_token)) {
-        return;
-      }
-    }
+  last_check_in_ms = millis();
 
-    DeviceStatus status;
-    FetchResult cr = http_check_in(cfg, device_token, status);
-
-    if (cr == FetchResult::ERROR) {
-      device_token = "";
+  // Reconnect WiFi if lost
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi: connection lost, reconnecting...");
+    if (!wifi_connect(cfg)) {
+      Serial.println("WiFi: reconnect failed, will retry next cycle");
       return;
     }
+  }
 
-    refresh_rate_ms = (unsigned long)status.refresh_rate * 1000UL;
+  // Refresh token if missing
+  if (device_token.length() == 0 && !device_login(cfg, device_token)) {
+    return;
+  }
 
-    if (status.has_image && status.content_changed) {
-      FetchResult fr = http_fetch_display_with_token(cfg, device_token);
-      if (fr == FetchResult::OK) {
-        display_init_and_draw_raw();
-      } else if (fr == FetchResult::ERROR) {
-        device_token = "";
-      }
-    } else if (!status.has_image && showing_content) {
-      display_init_and_draw_no_content();
+  DeviceStatus status;
+  FetchResult cr = http_check_in(cfg, device_token, status);
+
+  if (cr == FetchResult::ERROR) {
+    device_token = "";
+    return;
+  }
+
+  refresh_rate_ms = (unsigned long)status.refresh_rate * 1000UL;
+
+  if (status.has_image && status.content_changed) {
+    FetchResult fr = http_fetch_display_with_token(cfg, device_token);
+    if (fr == FetchResult::OK) {
+      display_init_and_draw_raw();
+    } else if (fr == FetchResult::ERROR) {
+      device_token = "";
     }
+  } else if (!status.has_image && showing_content) {
+    display_init_and_draw_no_content();
   }
 
   delay(10);

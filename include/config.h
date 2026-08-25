@@ -3,6 +3,10 @@
 
 #include <Arduino.h>
 
+// Deep-sleep interval until the backend owns the sleep schedule (15 min).
+// Backend task: return sleep/wake schedule in device check-in response.
+#define DEEP_SLEEP_INTERVAL_MS (15UL * 60UL * 1000UL)
+
 struct DeviceConfig {
   String ssid;
   String password;

@@ -12,6 +12,8 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
+extern void clearToWhite();
+
 
 static String provisioning_generate_password() {
   static const char chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -226,6 +228,12 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
   while (!claim_done) {
     dns.processNextRequest();
     server.handleClient();
+
+    // KEY1 press → whiten the welcome/waiting screen (non-persistent; replug redraws welcome)
+    if (digitalRead(KEY1_PIN) == LOW) {
+      clearToWhite();
+      while (digitalRead(KEY1_PIN) == LOW) delay(50); // wait for release
+    }
 
     uint32_t now = millis();
     if (now - last_poll >= POLL_INTERVAL_MS) {

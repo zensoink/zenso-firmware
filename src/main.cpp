@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <SPI.h>
+#include <esp_sleep.h>
 #include <LittleFS.h>
 #include <GxEPD2_7C.h>
 #include <epd7c/GxEPD2_730c_ACeP_730.h>
@@ -181,6 +182,14 @@ static void display_init_and_draw_no_content() {
   showing_content = false;
 }
 
+static void enter_deep_sleep() {
+  display.powerOff();
+  esp_sleep_enable_timer_wakeup((uint64_t)DEEP_SLEEP_INTERVAL_MS * 1000ULL);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)KEY1_PIN, 0); // GPIO2 wakes on LOW
+  Serial.printf("Deep sleep %us (KEY1 wakes)\n", DEEP_SLEEP_INTERVAL_MS / 1000);
+  esp_deep_sleep_start();
+}
+
 static void initial_fetch_and_display() {
   if (!device_login(cfg, device_token)) {
     display_init_and_draw_no_content();
@@ -327,8 +336,12 @@ void setup()
   // First fetch: login + check-in + display
   initial_fetch_and_display();
 
-  last_check_in_ms = millis();
-  Serial.println("===== DONE =====");
+  // Provisioning runs a blocking loop, so reaching here means we are claimed.
+  if (cfg.hardware_id.length() > 0 && cfg.device_secret.length() > 0) {
+    enter_deep_sleep();
+  }
+
+  Serial.println("Setup: not provisioned — staying awake");
 }
 
 void loop()

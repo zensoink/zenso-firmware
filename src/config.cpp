@@ -26,6 +26,7 @@ bool config_load(DeviceConfig &cfg) {
   cfg.ssid = doc["ssid"] | "";
   cfg.password = doc["password"] | "";
   cfg.api_url = doc["api_url"] | "";
+  if (cfg.api_url.endsWith("/")) cfg.api_url.remove(cfg.api_url.length() - 1);
   cfg.hardware_id = doc["hardware_id"] | "";
   cfg.device_secret = doc["device_secret"] | "";
 

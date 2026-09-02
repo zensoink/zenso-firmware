@@ -167,7 +167,7 @@ static void display_init_and_draw_raw() {
   if (drawRAW("/display.raw")) {
     showing_content = true;
   } else {
-    provisioning_screen_draw_no_content(cfg.hardware_id);
+    provisioning_screen_draw_no_content(device_get_id());
     showing_content = false;
   }
   if (showing_content) display.powerOff();
@@ -178,7 +178,7 @@ static void display_init_and_draw_no_content() {
   display.init(115200, true, 2, false);
   display.setRotation(0);
   display.setFullWindow();
-  provisioning_screen_draw_no_content(cfg.hardware_id);
+  provisioning_screen_draw_no_content(device_get_id());
   showing_content = false;
 }
 
@@ -337,7 +337,7 @@ void setup()
   initial_fetch_and_display();
 
   // Provisioning runs a blocking loop, so reaching here means we are claimed.
-  if (cfg.hardware_id.length() > 0 && cfg.device_secret.length() > 0) {
+  if (cfg.device_secret.length() > 0) {
     enter_deep_sleep();
   }
 

@@ -1,8 +1,10 @@
 #include <Arduino.h>
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <LittleFS.h>
+#include <memory>
 #include "config.h"
 #include "device_identity.h"
 #include "http_client.h"
@@ -10,13 +12,18 @@
 
 // ── Helpers ──
 
+static WiFiClient* make_client(const String &url) {
+  if (url.startsWith("https://")) {
+    auto *c = new WiFiClientSecure();
+    c->setInsecure();
+    return c;
+  }
+  return new WiFiClient();
+}
+
 static bool validate_config(const DeviceConfig &cfg) {
   String missing;
   if (cfg.api_url.length() == 0) missing += "api_url";
-  if (cfg.hardware_id.length() == 0) {
-    if (missing.length() > 0) missing += ", ";
-    missing += "hardware_id";
-  }
   if (cfg.device_secret.length() == 0) {
     if (missing.length() > 0) missing += ", ";
     missing += "device_secret";
@@ -33,11 +40,10 @@ static bool validate_config(const DeviceConfig &cfg) {
 bool device_login(const DeviceConfig &cfg, String &out_token) {
   if (!validate_config(cfg)) return false;
 
-  WiFiClient client;
-  HTTPClient http;
-
   String login_url = cfg.api_url + "/auth/device/login";
-  http.begin(client, login_url);
+  std::unique_ptr<WiFiClient> client(make_client(login_url));
+  HTTPClient http;
+  http.begin(*client, login_url);
   http.addHeader("Content-Type", "application/json");
 
   JsonDocument login_doc;
@@ -80,11 +86,10 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
   // Defaults
   out_status = { -1, 300, false, false };
 
-  WiFiClient client;
-  HTTPClient http;
-
   String url = cfg.api_url + "/devices/check-in";
-  http.begin(client, url);
+  std::unique_ptr<WiFiClient> client(make_client(url));
+  HTTPClient http;
+  http.begin(*client, url);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", "Bearer " + token);
 
@@ -133,7 +138,6 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
 FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String &token) {
   if (!validate_config(cfg)) return FetchResult::ERROR;
 
-  WiFiClient client;
   HTTPClient http;
 
   // Load saved ETag
@@ -149,7 +153,8 @@ FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String 
   }
 
   String display_url = cfg.api_url + "/devices/display";
-  http.begin(client, display_url);
+  std::unique_ptr<WiFiClient> client(make_client(display_url));
+  http.begin(*client, display_url);
   http.addHeader("Authorization", "Bearer " + token);
   if (etag.length() > 0) {
     http.addHeader("If-None-Match", etag);
@@ -198,6 +203,7 @@ FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String 
         total += len;
       }
     }
+    delay(1);
   }
   file.close();
 

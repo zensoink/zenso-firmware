@@ -82,7 +82,7 @@ void handle_dev_command(char cmd, DeviceConfig &cfg) {
 
   if (cmd == '4') {
     provisioning_screen_init();
-    provisioning_screen_draw_no_content(cfg.hardware_id);
+    provisioning_screen_draw_no_content(device_get_id());
     Serial.println("-> No-content screen shown");
     return;
   }

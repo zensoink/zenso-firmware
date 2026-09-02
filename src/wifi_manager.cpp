@@ -9,10 +9,21 @@
 #include "portal_html.h"
 #include "pins.h"
 #include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
+#include <memory>
 
 extern void clearToWhite();
+
+static WiFiClient* make_client(const String &url) {
+  if (url.startsWith("https://")) {
+    auto *c = new WiFiClientSecure();
+    c->setInsecure();
+    return c;
+  }
+  return new WiFiClient();
+}
 
 
 static String provisioning_generate_password() {
@@ -102,6 +113,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     cfg.ssid = server.arg("ssid");
     cfg.password = server.arg("password");
     cfg.api_url = server.arg("api_url");
+    if (cfg.api_url.endsWith("/")) cfg.api_url.remove(cfg.api_url.length() - 1);
 
     config_save(cfg);
     Serial.println("Provisioning: config saved");
@@ -116,10 +128,10 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
 
     delay(500);
 
-    WiFiClient client;
-    HTTPClient http;
     String bootstrap_url = cfg.api_url + "/device/bootstrap";
-    http.begin(client, bootstrap_url);
+    std::unique_ptr<WiFiClient> client(make_client(bootstrap_url));
+    HTTPClient http;
+    http.begin(*client, bootstrap_url);
     http.addHeader("Content-Type", "application/json");
 
     String hardware_id = normalize_hardware_id(device_get_id());
@@ -141,6 +153,7 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
 
     if (http_code != 200 && http_code != 201) {
       Serial.printf("Provisioning: bootstrap HTTP %d\n", http_code);
+      Serial.println("Provisioning: response: " + response_body);
       server.send(200, "text/html", portal_html_server_error(http_code));
       return;
     }
@@ -248,10 +261,10 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
       }
 
       // GET /device/claim-status/:id
-      WiFiClient poll_client;
-      HTTPClient poll_http;
       String poll_url = cfg.api_url + "/device/claim-status/" + identity.claim_session_id;
-      poll_http.begin(poll_client, poll_url);
+      std::unique_ptr<WiFiClient> poll_client(make_client(poll_url));
+      HTTPClient poll_http;
+      poll_http.begin(*poll_client, poll_url);
       int poll_code = poll_http.GET();
       String poll_body = poll_http.getString();
       poll_http.end();

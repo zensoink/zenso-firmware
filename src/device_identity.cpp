@@ -10,7 +10,10 @@ String normalize_hardware_id(const String &raw) {
   for (size_t i = 0; i < raw.length(); i++) {
     char c = raw.charAt(i);
     if (c != ':' && c != '-') {
-      result += toupper(c);
+      // NB: toupper() returns int; appending it directly would select
+      // String::operator+=(int) and stringify the char code in decimal
+      // (e.g. 'E' -> "69"). Cast back to char to append the character.
+      result += static_cast<char>(toupper(static_cast<unsigned char>(c)));
     }
   }
   return result;

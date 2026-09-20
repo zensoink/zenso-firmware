@@ -28,6 +28,9 @@ static String device_token;
 static bool showing_content = false;
 static unsigned long last_check_in_ms = 0;
 static unsigned long refresh_rate_ms = 60000;
+RTC_DATA_ATTR static int retry_count = 0;
+static const int MAX_RETRY_COUNT = 3;
+static const unsigned long RETRY_INTERVAL_S = 60; // 1 minute fast retry
 
 bool drawRAW(const char *filename)
 {
@@ -195,12 +198,14 @@ static void enter_deep_sleep(unsigned long sleep_ms = 0) {
   esp_deep_sleep_start();
 }
 
-static void initial_fetch_and_display() {
+static bool initial_fetch_and_display() {
   Serial.println("[Setup] Logging in to backend...");
   if (!device_login(cfg, device_token)) {
     Serial.println("[Setup] Device login failed.");
-    display_init_and_draw_no_content();
-    return;
+    if (!LittleFS.exists("/display.raw") && !showing_content) {
+      display_init_and_draw_no_content();
+    }
+    return false;
   }
 
   DeviceStatus status;
@@ -224,7 +229,7 @@ static void initial_fetch_and_display() {
   if (ci == FetchResult::OK && status.has_image && !status.content_changed) {
     Serial.println("[Setup] Content has not changed, rendering cached image...");
     display_init_and_draw_raw();
-    return;
+    return true;
   }
 
   if (ci == FetchResult::OK && status.has_image && status.content_changed) {
@@ -232,11 +237,14 @@ static void initial_fetch_and_display() {
     FetchResult fr = http_fetch_display_with_token(cfg, device_token);
     if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
       display_init_and_draw_raw();
+      return true;
     } else {
-      Serial.println("[Setup] Display fetch failed, showing placeholder.");
-      display_init_and_draw_no_content();
+      Serial.println("[Setup] Display fetch failed — preserving existing screen.");
+      if (!LittleFS.exists("/display.raw") && !showing_content) {
+        display_init_and_draw_no_content();
+      }
+      return false;
     }
-    return;
   }
 
   if (ci != FetchResult::OK) {
@@ -244,15 +252,19 @@ static void initial_fetch_and_display() {
     FetchResult fr = http_fetch_display_with_token(cfg, device_token);
     if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
       display_init_and_draw_raw();
+      return true;
     } else {
-      Serial.println("[Setup] Direct fetch failed, showing placeholder.");
-      display_init_and_draw_no_content();
+      Serial.println("[Setup] Direct fetch failed — preserving existing screen.");
+      if (!LittleFS.exists("/display.raw") && !showing_content) {
+        display_init_and_draw_no_content();
+      }
+      return false;
     }
-    return;
   }
 
   Serial.println("[Setup] No image assigned to this device.");
   display_init_and_draw_no_content();
+  return true;
 }
 
 void setup()
@@ -268,6 +280,12 @@ void setup()
   disableLoopWDT();
 
   pinMode(KEY1_PIN, INPUT_PULLUP);
+
+  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+  if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
+    Serial.println("[Power] Woken by KEY1 button press — resetting retry counter");
+    retry_count = 0;
+  }
 
   Serial.println("\n===== START =====");
 
@@ -340,9 +358,22 @@ void setup()
       }
     }
   } else if (!wifi_connect(cfg)) {
-    Serial.println("Setup: WiFi connection failed — starting provisioning mode");
-    wifi_start_provisioning(cfg);
-    {
+    if (cfg.device_secret.length() > 0) {
+      Serial.println("Setup: WiFi connection failed for claimed device");
+      retry_count++;
+      if (retry_count <= MAX_RETRY_COUNT) {
+        Serial.printf("[Power] WiFi failed (attempt %d/%d). Fast retry in %lus...\n",
+                      retry_count, MAX_RETRY_COUNT, RETRY_INTERVAL_S);
+        enter_deep_sleep(RETRY_INTERVAL_S * 1000UL);
+      } else {
+        retry_count = 0;
+        Serial.printf("[Power] Max retries reached (%d/%d). Falling back to normal schedule (%lus)...\n",
+                      MAX_RETRY_COUNT, MAX_RETRY_COUNT, refresh_rate_ms / 1000UL);
+        enter_deep_sleep(refresh_rate_ms);
+      }
+    } else {
+      Serial.println("Setup: WiFi connection failed — starting provisioning mode");
+      wifi_start_provisioning(cfg);
       DeviceIdentity post_identity = identity_load();
       if (post_identity.hardware_id.length() > 0 && post_identity.device_secret.length() > 0) {
         cfg.hardware_id = post_identity.hardware_id;
@@ -358,22 +389,38 @@ void setup()
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Setup: WiFi lost after connect, reconnecting...");
     if (!wifi_connect(cfg)) {
-      Serial.println("Setup: WiFi reconnect failed — starting provisioning mode");
-      wifi_start_provisioning(cfg);
-      DeviceIdentity post_identity = identity_load();
-      if (post_identity.hardware_id.length() > 0 && post_identity.device_secret.length() > 0) {
-        cfg.hardware_id = post_identity.hardware_id;
-        cfg.device_secret = post_identity.device_secret;
+      if (cfg.device_secret.length() > 0) {
+        retry_count++;
+        enter_deep_sleep(retry_count <= MAX_RETRY_COUNT ? RETRY_INTERVAL_S * 1000UL : refresh_rate_ms);
+      } else {
+        Serial.println("Setup: WiFi reconnect failed — starting provisioning mode");
+        wifi_start_provisioning(cfg);
       }
     }
   }
 
   // First fetch: login + check-in + display
-  initial_fetch_and_display();
+  bool update_success = initial_fetch_and_display();
 
   // Provisioning runs a blocking loop, so reaching here means we are claimed.
   if (cfg.device_secret.length() > 0) {
-    enter_deep_sleep(refresh_rate_ms);
+    if (update_success) {
+      retry_count = 0;
+      Serial.printf("[Power] Update successful. Normal sleep for %lus\n", refresh_rate_ms / 1000UL);
+      enter_deep_sleep(refresh_rate_ms);
+    } else {
+      retry_count++;
+      if (retry_count <= MAX_RETRY_COUNT) {
+        Serial.printf("[Power] Update failed (attempt %d/%d). Fast retry in %lus...\n",
+                      retry_count, MAX_RETRY_COUNT, RETRY_INTERVAL_S);
+        enter_deep_sleep(RETRY_INTERVAL_S * 1000UL);
+      } else {
+        retry_count = 0;
+        Serial.printf("[Power] Max retries reached (%d/%d). Falling back to normal schedule (%lus)...\n",
+                      MAX_RETRY_COUNT, MAX_RETRY_COUNT, refresh_rate_ms / 1000UL);
+        enter_deep_sleep(refresh_rate_ms);
+      }
+    }
   }
 
   Serial.println("Setup: not provisioned — staying awake");

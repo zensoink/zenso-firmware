@@ -208,19 +208,47 @@ FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String 
   uint8_t buf[1024];
   size_t total = 0;
   unsigned long last_progress_ms = millis();
+  unsigned long last_read_ms = millis();
 
-  while (http.connected() || stream->available()) {
+  while (content_length > 0 ? (total < (size_t)content_length) : (http.connected() || stream->available())) {
+    bool bytes_read = false;
     while (stream->available()) {
-      int len = stream->read(buf, sizeof(buf));
+      size_t to_read = sizeof(buf);
+      if (content_length > 0 && ((size_t)content_length - total) < to_read) {
+        to_read = (size_t)content_length - total;
+      }
+      int len = stream->read(buf, to_read);
       if (len > 0) {
         file.write(buf, len);
         total += len;
+        bytes_read = true;
+        last_read_ms = millis();
+      }
+      if (content_length > 0 && total >= (size_t)content_length) {
+        break;
       }
     }
+
+    if (content_length > 0 && total >= (size_t)content_length) {
+      break;
+    }
+
     if (millis() - last_progress_ms > 1000 && total > 0) {
-      Serial.printf("[HttpClient] Downloaded %u bytes...\n", (unsigned)total);
+      if (content_length > 0) {
+        Serial.printf("[HttpClient] Streamed %u / %d bytes (%u%%)...\n",
+                      (unsigned)total, content_length, (unsigned)(total * 100 / content_length));
+      } else {
+        Serial.printf("[HttpClient] Streamed %u bytes...\n", (unsigned)total);
+      }
       last_progress_ms = millis();
     }
+
+    // Guard against socket hang (10s with no data)
+    if (!bytes_read && (millis() - last_read_ms > 10000)) {
+      Serial.println("[HttpClient] Stream read timeout (10s without data)");
+      break;
+    }
+
     delay(1);
   }
   file.close();

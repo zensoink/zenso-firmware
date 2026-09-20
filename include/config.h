@@ -13,6 +13,7 @@ struct DeviceConfig {
   String api_url;
   String hardware_id;
   String device_secret;
+  String display_profile;
 };
 
 bool config_load(DeviceConfig &cfg);

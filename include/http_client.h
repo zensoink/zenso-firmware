@@ -16,6 +16,9 @@ struct DeviceStatus {
   int refresh_rate;    // seconds
   bool has_image;
   bool content_changed;
+  String display_profile;
+  int width;
+  int height;
 };
 
 FetchResult http_fetch_display(const DeviceConfig &cfg);

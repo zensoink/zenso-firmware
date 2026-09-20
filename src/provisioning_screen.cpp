@@ -1,49 +1,16 @@
 #include <Arduino.h>
 #include <SPI.h>
-#include <GxEPD2_7C.h>
-#include <epd7c/GxEPD2_730c_ACeP_730.h>
 #include <qrcode.h>
+#include "display_manager.h"
 #include "pins.h"
 #include "provisioning_screen.h"
 
-#ifndef MAX_DISPLAY_BUFFER_SIZE
-#define MAX_DISPLAY_BUFFER_SIZE 65536ul
-#endif
-
-#ifndef MAX_HEIGHT_7C
-#define MAX_HEIGHT_7C(EPD) ((EPD::HEIGHT <= (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 2)) ? \
-                            EPD::HEIGHT : (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 2))
-#endif
-
-extern GxEPD2_7C<GxEPD2_730c_ACeP_730, MAX_HEIGHT_7C(GxEPD2_730c_ACeP_730)> display;
-
-// ── Layout constants (display: 800×480) ──
-
-// Left-column x (text-only screens)
-static const int16_t LX = 55;
-
-// Right-column x (screens with QR + text side by side)
-static const int16_t RIGHT_X   = 310;
-static const int16_t QR_X      = 35;
-static const int16_t QR_Y      = 50;
-static const int16_t QR_MODULE = 5;
-
-// Left-column Y positions (text-only screens)
-static const int16_t Y_TITLE = 100;
-static const int16_t Y_BODY1 = 160;
-static const int16_t Y_BODY2 = 200;
-static const int16_t Y_BODY3 = 240;
-static const int16_t Y_BODY4 = 290;
-
-// Footer / branding (shared by all)
-static const int16_t BRANDING_X = 700;
-static const int16_t BRANDING_Y = 455;
-
 void provisioning_screen_init() {
   SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
-  display.init(115200, true, 2, false);
-  display.setRotation(0);
-  display.setFullWindow();
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  disp->init(115200, true, 2, false);
+  disp->setRotation(0);
+  disp->setFullWindow();
 }
 
 void provisioning_screen_draw(
@@ -52,9 +19,23 @@ void provisioning_screen_draw(
   const String &ap_url,
   const String &firmware_version)
 {
-  display.firstPage();
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  const int16_t w = disp->width();
+  const int16_t h = disp->height();
+
+  const int16_t qr_module = (w < 600) ? 3 : ((w < 800) ? 4 : 5);
+  const int16_t qr_x = (w < 600) ? 20 : 35;
+  const int16_t qr_y = (h < 400) ? 30 : 50;
+  const int16_t right_x = (w < 600) ? 180 : ((w < 800) ? 240 : 310);
+  const int16_t branding_x = w - 100;
+  const int16_t branding_y = h - 25;
+
+  const uint8_t title_size = (w < 600) ? 2 : 3;
+  const uint8_t text_size = (w < 600) ? 1 : 2;
+
+  disp->firstPage();
   do {
-    display.fillScreen(GxEPD_WHITE);
+    disp->fillScreen(GxEPD_WHITE);
 
     // ---- QR code (WPA credentials) ----
     String wifi_qr = "WIFI:T:WPA;S:" + ap_ssid + ";P:" + ap_password + ";;";
@@ -63,199 +44,243 @@ void provisioning_screen_draw(
     uint8_t qrcodeData[qrcode_getBufferSize(3)];
 
     if (qrcode_initText(&qrcode, qrcodeData, 3, ECC_LOW, wifi_qr.c_str()) == 0) {
-      uint16_t qr_size = qrcode.size * QR_MODULE;
+      uint16_t qr_size = qrcode.size * qr_module;
 
-      display.fillRect(QR_X - QR_MODULE, QR_Y - QR_MODULE,
-                       qr_size + 2 * QR_MODULE, qr_size + 2 * QR_MODULE, GxEPD_WHITE);
+      disp->fillRect(qr_x - qr_module, qr_y - qr_module,
+                     qr_size + 2 * qr_module, qr_size + 2 * qr_module, GxEPD_WHITE);
 
       for (uint8_t y = 0; y < qrcode.size; y++) {
         for (uint8_t x = 0; x < qrcode.size; x++) {
           if (qrcode_getModule(&qrcode, x, y)) {
-            display.fillRect(QR_X + x * QR_MODULE, QR_Y + y * QR_MODULE,
-                             QR_MODULE, QR_MODULE, GxEPD_BLACK);
+            disp->fillRect(qr_x + x * qr_module, qr_y + y * qr_module,
+                           qr_module, qr_module, GxEPD_BLACK);
           }
         }
       }
     }
 
     // ---- Text ----
-    display.setTextColor(GxEPD_BLACK);
+    disp->setTextColor(GxEPD_BLACK);
 
-    display.setCursor(RIGHT_X, 80);
-    display.setTextSize(3);
-    display.print("Welcome in Zenso!");
+    disp->setCursor(right_x, (h < 400) ? 40 : 80);
+    disp->setTextSize(title_size);
+    disp->print("Welcome in Zenso!");
 
-    display.setCursor(RIGHT_X, 140);
-    display.setTextSize(2);
-    display.print("1. Scan QR or connect to WiFi:");
+    disp->setCursor(right_x, (h < 400) ? 80 : 140);
+    disp->setTextSize(text_size);
+    disp->print("1. Scan QR or connect to WiFi:");
 
-    display.setCursor(RIGHT_X, 170);
-    display.setTextSize(2);
-    display.print("   SSID: ");
-    display.print(ap_ssid);
+    disp->setCursor(right_x, (h < 400) ? 105 : 170);
+    disp->setTextSize(text_size);
+    disp->print("   SSID: ");
+    disp->print(ap_ssid);
 
-    display.setCursor(RIGHT_X, 200);
-    display.setTextSize(2);
-    display.print("   Password: ");
-    display.print(ap_password);
+    disp->setCursor(right_x, (h < 400) ? 130 : 200);
+    disp->setTextSize(text_size);
+    disp->print("   Password: ");
+    disp->print(ap_password);
 
-    display.setCursor(RIGHT_X, 250);
-    display.setTextSize(2);
-    display.print("2. Open in browser:");
+    disp->setCursor(right_x, (h < 400) ? 165 : 250);
+    disp->setTextSize(text_size);
+    disp->print("2. Open in browser:");
 
-    display.setCursor(RIGHT_X, 280);
-    display.setTextSize(2);
-    display.print("   ");
-    display.print(ap_url);
+    disp->setCursor(right_x, (h < 400) ? 190 : 280);
+    disp->setTextSize(text_size);
+    disp->print("   ");
+    disp->print(ap_url);
 
     // Bottom: Firmware version + branding
     String fw_str = "Firmware: " + firmware_version;
     int16_t x1, y1;
     uint16_t fw_w, fw_h;
-    display.setTextSize(1);
-    display.getTextBounds(fw_str, 0, 0, &x1, &y1, &fw_w, &fw_h);
-    display.setCursor(BRANDING_X - fw_w - 20, BRANDING_Y);
-    display.print(fw_str);
+    disp->setTextSize(1);
+    disp->getTextBounds(fw_str, 0, 0, &x1, &y1, &fw_w, &fw_h);
+    disp->setCursor(branding_x - fw_w - 20, branding_y);
+    disp->print(fw_str);
 
-    display.setCursor(BRANDING_X, BRANDING_Y);
-    display.print("zenso.ink");
+    disp->setCursor(branding_x, branding_y);
+    disp->print("zenso.ink");
 
-  } while (display.nextPage());
+  } while (disp->nextPage());
 
-  display.powerOff();
+  disp->powerOff();
 }
 
 void provisioning_screen_draw_waiting(const String &claim_url, const String &wifi_ip) {
-  display.firstPage();
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  const int16_t w = disp->width();
+  const int16_t h = disp->height();
+
+  const int16_t qr_module = (w < 600) ? 3 : ((w < 800) ? 4 : 5);
+  const int16_t qr_x = (w < 600) ? 20 : 35;
+  const int16_t qr_y = (h < 400) ? 30 : 50;
+  const int16_t right_x = (w < 600) ? 180 : ((w < 800) ? 240 : 310);
+  const int16_t branding_x = w - 100;
+  const int16_t branding_y = h - 25;
+
+  const uint8_t title_size = (w < 600) ? 2 : 3;
+  const uint8_t text_size = (w < 600) ? 1 : 2;
+
+  disp->firstPage();
   do {
-    display.fillScreen(GxEPD_WHITE);
+    disp->fillScreen(GxEPD_WHITE);
 
     // ---- QR code (claim URL) ----
     QRCode qrcode;
     uint8_t qrcodeData[qrcode_getBufferSize(4)];
 
     if (qrcode_initText(&qrcode, qrcodeData, 4, ECC_LOW, claim_url.c_str()) == 0) {
-      uint16_t qr_size = qrcode.size * QR_MODULE;
+      uint16_t qr_size = qrcode.size * qr_module;
 
-      display.fillRect(QR_X - QR_MODULE, QR_Y - QR_MODULE,
-                       qr_size + 2 * QR_MODULE, qr_size + 2 * QR_MODULE, GxEPD_WHITE);
+      disp->fillRect(qr_x - qr_module, qr_y - qr_module,
+                     qr_size + 2 * qr_module, qr_size + 2 * qr_module, GxEPD_WHITE);
 
       for (uint8_t y = 0; y < qrcode.size; y++) {
         for (uint8_t x = 0; x < qrcode.size; x++) {
           if (qrcode_getModule(&qrcode, x, y)) {
-            display.fillRect(QR_X + x * QR_MODULE, QR_Y + y * QR_MODULE,
-                             QR_MODULE, QR_MODULE, GxEPD_BLACK);
+            disp->fillRect(qr_x + x * qr_module, qr_y + y * qr_module,
+                           qr_module, qr_module, GxEPD_BLACK);
           }
         }
       }
     }
 
     // ---- Text ----
-    display.setTextColor(GxEPD_BLACK);
+    disp->setTextColor(GxEPD_BLACK);
 
-    display.setCursor(RIGHT_X, 60);
-    display.setTextSize(3);
-    display.print("Waiting for");
+    disp->setCursor(right_x, (h < 400) ? 35 : 60);
+    disp->setTextSize(title_size);
+    disp->print("Waiting for");
 
-    display.setCursor(RIGHT_X, 100);
-    display.setTextSize(3);
-    display.print("Authorization");
+    disp->setCursor(right_x, (h < 400) ? 65 : 100);
+    disp->setTextSize(title_size);
+    disp->print("Authorization");
 
-    display.setCursor(RIGHT_X, 160);
-    display.setTextSize(2);
-    display.print("WiFi connected: ");
-    display.print(wifi_ip);
+    disp->setCursor(right_x, (h < 400) ? 100 : 160);
+    disp->setTextSize(text_size);
+    disp->print("WiFi connected: ");
+    disp->print(wifi_ip);
 
-    display.setCursor(RIGHT_X, 200);
-    display.setTextSize(2);
-    display.print("Scan QR or open link in browser");
+    disp->setCursor(right_x, (h < 400) ? 130 : 200);
+    disp->setTextSize(text_size);
+    disp->print("Scan QR or open link in browser");
 
-    display.setCursor(RIGHT_X, 240);
-    display.setTextSize(2);
-    display.print("to claim this device");
+    disp->setCursor(right_x, (h < 400) ? 155 : 240);
+    disp->setTextSize(text_size);
+    disp->print("to claim this device");
 
-    display.setCursor(RIGHT_X, 290);
-    display.setTextSize(1);
-    display.print(claim_url);
+    disp->setCursor(right_x, (h < 400) ? 190 : 290);
+    disp->setTextSize(1);
+    disp->print(claim_url);
 
-    display.setCursor(BRANDING_X, BRANDING_Y);
-    display.setTextSize(1);
-    display.print("zenso.ink");
+    disp->setCursor(branding_x, branding_y);
+    disp->setTextSize(1);
+    disp->print("zenso.ink");
 
-  } while (display.nextPage());
+  } while (disp->nextPage());
 
-  display.powerOff();
+  disp->powerOff();
 }
 
 void provisioning_screen_draw_claim_expired() {
-  display.firstPage();
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  const int16_t w = disp->width();
+  const int16_t h = disp->height();
+
+  const int16_t lx = (w < 600) ? 25 : 55;
+  const int16_t y_title = (h < 400) ? 40 : 100;
+  const int16_t y_body1 = (h < 400) ? 80 : 160;
+  const int16_t y_body2 = (h < 400) ? 115 : 200;
+  const int16_t y_body3 = (h < 400) ? 150 : 240;
+  const int16_t y_body4 = (h < 400) ? 185 : 290;
+  const int16_t branding_x = w - 100;
+  const int16_t branding_y = h - 25;
+
+  const uint8_t title_size = (w < 600) ? 2 : 3;
+  const uint8_t text_size = (w < 600) ? 1 : 2;
+
+  disp->firstPage();
   do {
-    display.fillScreen(GxEPD_WHITE);
+    disp->fillScreen(GxEPD_WHITE);
 
-    display.setTextColor(GxEPD_RED);
-    display.setCursor(LX, Y_TITLE);
-    display.setTextSize(3);
-    display.print("Claim Expired");
+    disp->setTextColor(GxEPD_BLACK);
+    disp->setCursor(lx, y_title);
+    disp->setTextSize(title_size);
+    disp->print("Claim Expired");
 
-    display.setTextColor(GxEPD_BLACK);
-    display.setCursor(LX, Y_BODY1);
-    display.setTextSize(2);
-    display.print("Authorization window has closed.");
+    disp->setCursor(lx, y_body1);
+    disp->setTextSize(text_size);
+    disp->print("Authorization window has closed.");
 
-    display.setCursor(LX, Y_BODY2);
-    display.setTextSize(2);
-    display.print("To try again:");
+    disp->setCursor(lx, y_body2);
+    disp->setTextSize(text_size);
+    disp->print("To try again:");
 
-    display.setCursor(LX, Y_BODY3);
-    display.setTextSize(2);
-    display.print("Hold KEY1 for 3 seconds");
+    disp->setCursor(lx, y_body3);
+    disp->setTextSize(text_size);
+    disp->print("Hold KEY1 for 3 seconds");
 
-    display.setCursor(LX, Y_BODY4);
-    display.setTextSize(2);
-    display.print("to restart provisioning.");
+    disp->setCursor(lx, y_body4);
+    disp->setTextSize(text_size);
+    disp->print("to restart provisioning.");
 
-    display.setCursor(BRANDING_X, BRANDING_Y);
-    display.setTextSize(1);
-    display.print("zenso.ink");
+    disp->setCursor(branding_x, branding_y);
+    disp->setTextSize(1);
+    disp->print("zenso.ink");
 
-  } while (display.nextPage());
+  } while (disp->nextPage());
 
-  display.powerOff();
+  disp->powerOff();
 }
 
 void provisioning_screen_draw_no_content(const String &hardware_id) {
-  display.firstPage();
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  const int16_t w = disp->width();
+  const int16_t h = disp->height();
+
+  const int16_t lx = (w < 600) ? 25 : 55;
+  const int16_t y_title = (h < 400) ? 40 : 100;
+  const int16_t y_body1 = (h < 400) ? 80 : 160;
+  const int16_t y_body2 = (h < 400) ? 115 : 200;
+  const int16_t y_body3 = (h < 400) ? 150 : 240;
+  const int16_t y_body4 = (h < 400) ? 185 : 290;
+  const int16_t branding_x = w - 100;
+  const int16_t branding_y = h - 25;
+
+  const uint8_t title_size = (w < 600) ? 2 : 3;
+  const uint8_t text_size = (w < 600) ? 1 : 2;
+
+  disp->firstPage();
   do {
-    display.fillScreen(GxEPD_WHITE);
+    disp->fillScreen(GxEPD_WHITE);
 
-    display.setTextColor(GxEPD_GREEN);
-    display.setCursor(LX, Y_TITLE);
-    display.setTextSize(3);
-    display.print("Device Ready");
+    disp->setTextColor(GxEPD_BLACK);
+    disp->setCursor(lx, y_title);
+    disp->setTextSize(title_size);
+    disp->print("Device Ready");
 
-    display.setTextColor(GxEPD_BLACK);
-    display.setCursor(LX, Y_BODY1);
-    display.setTextSize(2);
-    display.print("No content assigned yet.");
+    disp->setCursor(lx, y_body1);
+    disp->setTextSize(text_size);
+    disp->print("No content assigned yet.");
 
-    display.setCursor(LX, Y_BODY2);
-    display.setTextSize(2);
-    display.print("Open the Zenso panel to assign");
+    disp->setCursor(lx, y_body2);
+    disp->setTextSize(text_size);
+    disp->print("Open the Zenso panel to assign");
 
-    display.setCursor(LX, Y_BODY3);
-    display.setTextSize(2);
-    display.print("a screen to this device.");
+    disp->setCursor(lx, y_body3);
+    disp->setTextSize(text_size);
+    disp->print("a screen to this device.");
 
-    display.setCursor(LX, Y_BODY4);
-    display.setTextSize(1);
-    display.print("Device ID: ");
-    display.print(hardware_id);
+    disp->setCursor(lx, y_body4);
+    disp->setTextSize(1);
+    disp->print("Device ID: ");
+    disp->print(hardware_id);
 
-    display.setCursor(BRANDING_X, BRANDING_Y);
-    display.setTextSize(1);
-    display.print("zenso.ink");
+    disp->setCursor(branding_x, branding_y);
+    disp->setTextSize(1);
+    disp->print("zenso.ink");
 
-  } while (display.nextPage());
+  } while (disp->nextPage());
 
-  display.powerOff();
+  disp->powerOff();
 }

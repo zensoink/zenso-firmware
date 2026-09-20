@@ -84,7 +84,7 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
   if (!validate_config(cfg)) return FetchResult::ERROR;
 
   // Defaults
-  out_status = { -1, 300, false, false };
+  out_status = { -1, 300, false, false, "", 800, 480 };
 
   String url = cfg.api_url + "/devices/check-in";
   std::unique_ptr<WiFiClient> client(make_client(url));
@@ -124,12 +124,16 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
   out_status.refresh_rate = doc["refreshRate"].as<int>();
   out_status.has_image = doc["hasImage"].as<bool>();
   out_status.content_changed = doc["contentChanged"].as<bool>();
+  out_status.display_profile = doc["displayProfile"].as<String>();
+  out_status.width = doc["width"].is<int>() ? doc["width"].as<int>() : 800;
+  out_status.height = doc["height"].is<int>() ? doc["height"].as<int>() : 480;
 
   if (out_status.refresh_rate <= 0) out_status.refresh_rate = 300;
 
-  Serial.printf("[HttpClient] Check-in OK: screenId=%d refreshRate=%d hasImage=%d contentChanged=%d\n",
+  Serial.printf("[HttpClient] Check-in OK: screenId=%d refreshRate=%d hasImage=%d contentChanged=%d profile=%s (%dx%d)\n",
                 out_status.screen_id, out_status.refresh_rate,
-                out_status.has_image, out_status.content_changed);
+                out_status.has_image, out_status.content_changed,
+                out_status.display_profile.c_str(), out_status.width, out_status.height);
   return FetchResult::OK;
 }
 

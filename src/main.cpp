@@ -3,8 +3,7 @@
 #include <SPI.h>
 #include <esp_sleep.h>
 #include <LittleFS.h>
-#include <GxEPD2_7C.h>
-#include <epd7c/GxEPD2_730c_ACeP_730.h>
+#include "display_manager.h"
 #include "config.h"
 #include "device_identity.h"
 #include "pins.h"
@@ -13,19 +12,6 @@
 #include "http_client.h"
 #include "provisioning_screen.h"
 #include "dev_menu.h"
-
-#ifndef MAX_DISPLAY_BUFFER_SIZE
-#define MAX_DISPLAY_BUFFER_SIZE 65536ul
-#endif
-
-#ifndef MAX_HEIGHT_7C
-#define MAX_HEIGHT_7C(EPD) ((EPD::HEIGHT <= (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 2)) ? \
-                            EPD::HEIGHT : (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 2))
-#endif
-
-GxEPD2_7C<GxEPD2_730c_ACeP_730, MAX_HEIGHT_7C(GxEPD2_730c_ACeP_730)> display(
-  GxEPD2_730c_ACeP_730(CS_PIN, DC_PIN, RST_PIN, BUSY_PIN)
-);
 
 static const uint16_t epdPalette[7] = {
   GxEPD_BLACK,
@@ -52,8 +38,9 @@ bool drawRAW(const char *filename)
     return false;
   }
 
-  const int16_t w = display.width();
-  const int16_t h = display.height();
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  const int16_t w = disp->width();
+  const int16_t h = disp->height();
   const uint32_t rowSize = (w + 1) / 2;
   const uint32_t expectedSize = rowSize * h;
 
@@ -78,13 +65,13 @@ bool drawRAW(const char *filename)
 
   uint32_t colorCount[16] = {0};
 
-  display.setRotation(0);
-  display.setFullWindow();
+  disp->setRotation(0);
+  disp->setFullWindow();
 
-  display.firstPage();
+  disp->firstPage();
   do
   {
-    display.fillScreen(GxEPD_WHITE);
+    disp->fillScreen(GxEPD_WHITE);
 
     if (!rawFile.seek(0))
     {
@@ -114,19 +101,19 @@ bool drawRAW(const char *filename)
         uint8_t pixel2 = val & 0x0F;
 
         colorCount[pixel1]++;
-        display.drawPixel(x, y, (pixel1 < 7) ? epdPalette[pixel1] : GxEPD_WHITE);
+        disp->drawPixel(x, y, (pixel1 < 7) ? epdPalette[pixel1] : GxEPD_WHITE);
         x++;
 
         if (x < w)
         {
           colorCount[pixel2]++;
-          display.drawPixel(x, y, (pixel2 < 7) ? epdPalette[pixel2] : GxEPD_WHITE);
+          disp->drawPixel(x, y, (pixel2 < 7) ? epdPalette[pixel2] : GxEPD_WHITE);
           x++;
         }
       }
     }
   }
-  while (display.nextPage());
+  while (disp->nextPage());
 
   for (int i = 0; i < 16; i++)
   {
@@ -142,48 +129,49 @@ bool drawRAW(const char *filename)
 void clearToWhite()
 {
   Serial.println("Clearing screen...");
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  disp->init(115200, true, 2, false);
+  disp->setRotation(0);
+  disp->setFullWindow();
 
-  display.init(115200, true, 2, false);
-  display.setRotation(0);
-  display.setFullWindow();
-
-  display.firstPage();
+  disp->firstPage();
   do
   {
-    display.fillScreen(GxEPD_WHITE);
+    disp->fillScreen(GxEPD_WHITE);
   }
-  while (display.nextPage());
+  while (disp->nextPage());
 
-  display.powerOff();
+  disp->powerOff();
   Serial.println("Screen cleared");
 }
 
-// ponytail: display helpers wrap init+draw+powerOff in one call
 static void display_init_and_draw_raw() {
   SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
-  display.init(115200, true, 2, false);
-  display.setRotation(0);
-  display.setFullWindow();
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  disp->init(115200, true, 2, false);
+  disp->setRotation(0);
+  disp->setFullWindow();
   if (drawRAW("/display.raw")) {
     showing_content = true;
   } else {
     provisioning_screen_draw_no_content(device_get_id());
     showing_content = false;
   }
-  if (showing_content) display.powerOff();
+  if (showing_content) disp->powerOff();
 }
 
 static void display_init_and_draw_no_content() {
   SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
-  display.init(115200, true, 2, false);
-  display.setRotation(0);
-  display.setFullWindow();
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  disp->init(115200, true, 2, false);
+  disp->setRotation(0);
+  disp->setFullWindow();
   provisioning_screen_draw_no_content(device_get_id());
   showing_content = false;
 }
 
 static void enter_deep_sleep() {
-  display.powerOff();
+  DisplayManager::instance().power_off();
   esp_sleep_enable_timer_wakeup((uint64_t)DEEP_SLEEP_INTERVAL_MS * 1000ULL);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)KEY1_PIN, 0); // GPIO2 wakes on LOW
   Serial.printf("Deep sleep %us (KEY1 wakes)\n", DEEP_SLEEP_INTERVAL_MS / 1000);
@@ -200,6 +188,12 @@ static void initial_fetch_and_display() {
   FetchResult ci = http_check_in(cfg, device_token, status);
   if (ci == FetchResult::OK) {
     refresh_rate_ms = (unsigned long)status.refresh_rate * 1000UL;
+    if (status.display_profile.length() > 0 && status.display_profile != cfg.display_profile) {
+      Serial.printf("Backend profile update: %s -> %s\n", cfg.display_profile.c_str(), status.display_profile.c_str());
+      cfg.display_profile = status.display_profile;
+      config_save(cfg);
+      DisplayManager::instance().switch_profile(cfg.display_profile);
+    }
   }
 
   if (ci == FetchResult::OK && status.has_image && !status.content_changed) {
@@ -248,6 +242,7 @@ void setup()
   Serial.println("LittleFS OK");
 
   config_load(cfg);
+  DisplayManager::instance().init(cfg.display_profile);
 
   DeviceIdentity identity = identity_load();
 
@@ -393,6 +388,12 @@ void loop()
   }
 
   refresh_rate_ms = (unsigned long)status.refresh_rate * 1000UL;
+  if (status.display_profile.length() > 0 && status.display_profile != cfg.display_profile) {
+    Serial.printf("Backend profile update: %s -> %s\n", cfg.display_profile.c_str(), status.display_profile.c_str());
+    cfg.display_profile = status.display_profile;
+    config_save(cfg);
+    DisplayManager::instance().switch_profile(cfg.display_profile);
+  }
 
   if (status.has_image && status.content_changed) {
     FetchResult fr = http_fetch_display_with_token(cfg, device_token);

@@ -30,6 +30,7 @@ bool config_load(DeviceConfig &cfg) {
   cfg.hardware_id = doc["hardware_id"] | "";
   cfg.device_secret = doc["device_secret"] | "";
   cfg.display_profile = doc["display_profile"] | "spectra6_7in3";
+  cfg.refresh_rate = doc["refresh_rate"] | 300;
 
   Serial.println("Config: loaded successfully");
   return true;
@@ -43,6 +44,7 @@ bool config_save(const DeviceConfig &cfg) {
   doc["hardware_id"] = cfg.hardware_id;
   doc["device_secret"] = cfg.device_secret;
   doc["display_profile"] = cfg.display_profile.length() > 0 ? cfg.display_profile : "spectra6_7in3";
+  doc["refresh_rate"] = cfg.refresh_rate > 0 ? cfg.refresh_rate : 300;
   File file = LittleFS.open("/config.json", "w");
   if (!file) {
     Serial.println("Config: failed to open /config.json for writing");

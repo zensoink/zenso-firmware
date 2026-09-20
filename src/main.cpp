@@ -170,11 +170,14 @@ static void display_init_and_draw_no_content() {
   showing_content = false;
 }
 
-static void enter_deep_sleep() {
+static void enter_deep_sleep(unsigned long sleep_ms = 0) {
+  if (sleep_ms < 10000UL) {
+    sleep_ms = (cfg.refresh_rate > 0 ? (unsigned long)cfg.refresh_rate : DEFAULT_REFRESH_RATE_S) * 1000UL;
+  }
   DisplayManager::instance().power_off();
-  esp_sleep_enable_timer_wakeup((uint64_t)DEEP_SLEEP_INTERVAL_MS * 1000ULL);
+  esp_sleep_enable_timer_wakeup((uint64_t)sleep_ms * 1000ULL);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)KEY1_PIN, 0); // GPIO2 wakes on LOW
-  Serial.printf("Deep sleep %us (KEY1 wakes)\n", DEEP_SLEEP_INTERVAL_MS / 1000);
+  Serial.printf("Deep sleep %lus (KEY1 wakes)\n", sleep_ms / 1000UL);
   esp_deep_sleep_start();
 }
 
@@ -187,7 +190,12 @@ static void initial_fetch_and_display() {
   DeviceStatus status;
   FetchResult ci = http_check_in(cfg, device_token, status);
   if (ci == FetchResult::OK) {
-    refresh_rate_ms = (unsigned long)status.refresh_rate * 1000UL;
+    if (status.refresh_rate > 0 && status.refresh_rate != cfg.refresh_rate) {
+      Serial.printf("Backend refresh rate update: %d -> %d s\n", cfg.refresh_rate, status.refresh_rate);
+      cfg.refresh_rate = status.refresh_rate;
+      config_save(cfg);
+    }
+    refresh_rate_ms = (unsigned long)(cfg.refresh_rate > 0 ? cfg.refresh_rate : status.refresh_rate) * 1000UL;
     if (status.display_profile.length() > 0 && status.display_profile != cfg.display_profile) {
       Serial.printf("Backend profile update: %s -> %s\n", cfg.display_profile.c_str(), status.display_profile.c_str());
       cfg.display_profile = status.display_profile;
@@ -242,6 +250,8 @@ void setup()
   Serial.println("LittleFS OK");
 
   config_load(cfg);
+  if (cfg.refresh_rate <= 0) cfg.refresh_rate = DEFAULT_REFRESH_RATE_S;
+  refresh_rate_ms = (unsigned long)cfg.refresh_rate * 1000UL;
   DisplayManager::instance().init(cfg.display_profile);
 
   DeviceIdentity identity = identity_load();
@@ -333,7 +343,7 @@ void setup()
 
   // Provisioning runs a blocking loop, so reaching here means we are claimed.
   if (cfg.device_secret.length() > 0) {
-    enter_deep_sleep();
+    enter_deep_sleep(refresh_rate_ms);
   }
 
   Serial.println("Setup: not provisioned — staying awake");
@@ -387,7 +397,12 @@ void loop()
     return;
   }
 
-  refresh_rate_ms = (unsigned long)status.refresh_rate * 1000UL;
+  if (status.refresh_rate > 0 && status.refresh_rate != cfg.refresh_rate) {
+    Serial.printf("Backend refresh rate update: %d -> %d s\n", cfg.refresh_rate, status.refresh_rate);
+    cfg.refresh_rate = status.refresh_rate;
+    config_save(cfg);
+  }
+  refresh_rate_ms = (unsigned long)(cfg.refresh_rate > 0 ? cfg.refresh_rate : status.refresh_rate) * 1000UL;
   if (status.display_profile.length() > 0 && status.display_profile != cfg.display_profile) {
     Serial.printf("Backend profile update: %s -> %s\n", cfg.display_profile.c_str(), status.display_profile.c_str());
     cfg.display_profile = status.display_profile;

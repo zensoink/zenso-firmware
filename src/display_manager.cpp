@@ -1,10 +1,27 @@
 #include "display_manager.h"
 #include "pins.h"
+#include <GxEPD2_7C.h>
+#include <GxEPD2_3C.h>
 #include <GxEPD2_BW.h>
 #include <epd7c/GxEPD2_730c_GDEP073E01.h>
 #include <epd7c/GxEPD2_730c_ACeP_730.h>
 #include <epd7c/GxEPD2_565c.h>
 #include <epd3c/GxEPD2_420c.h>
+
+#ifndef MAX_DISPLAY_BUFFER_SIZE
+#define MAX_DISPLAY_BUFFER_SIZE 65536ul
+#endif
+
+#define MAX_HEIGHT_7C(EPD) ((EPD::HEIGHT <= (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 2)) ? \
+                            EPD::HEIGHT : (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 2))
+
+#define MAX_HEIGHT_3C(EPD) ((EPD::HEIGHT <= (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 4)) ? \
+                            EPD::HEIGHT : (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 4))
+
+// Yield to FreeRTOS IDLE task during e-paper busy waiting to prevent WDT resets
+static void epd_busy_callback(const void*) {
+    vTaskDelay(pdMS_TO_TICKS(10));
+}
 
 DisplayManager& DisplayManager::instance() {
     static DisplayManager inst;
@@ -30,28 +47,33 @@ void DisplayManager::_create_driver(const String& profile) {
     _current_profile = profile;
 
     if (profile == "acep_7in3") {
-        _display = new GxEPD2_BW<GxEPD2_730c_ACeP_730, GxEPD2_730c_ACeP_730::HEIGHT>(
+        auto* drv = new GxEPD2_7C<GxEPD2_730c_ACeP_730, MAX_HEIGHT_7C(GxEPD2_730c_ACeP_730)>(
             GxEPD2_730c_ACeP_730(CS_PIN, DC_PIN, RST_PIN, BUSY_PIN)
         );
+        drv->epd2.setBusyCallback(epd_busy_callback);
+        _display = drv;
     } else if (profile == "acep_5in65") {
-        _display = new GxEPD2_BW<GxEPD2_565c, GxEPD2_565c::HEIGHT>(
+        auto* drv = new GxEPD2_7C<GxEPD2_565c, MAX_HEIGHT_7C(GxEPD2_565c)>(
             GxEPD2_565c(CS_PIN, DC_PIN, RST_PIN, BUSY_PIN)
         );
+        drv->epd2.setBusyCallback(epd_busy_callback);
+        _display = drv;
     } else if (profile == "bwr_4in2") {
-        _display = new GxEPD2_BW<GxEPD2_420c, GxEPD2_420c::HEIGHT>(
+        auto* drv = new GxEPD2_3C<GxEPD2_420c, MAX_HEIGHT_3C(GxEPD2_420c)>(
             GxEPD2_420c(CS_PIN, DC_PIN, RST_PIN, BUSY_PIN)
         );
-    } else if (profile == "mono_800x480" || profile == "custom") {
-        _current_profile = profile;
-        _display = new GxEPD2_BW<GxEPD2_730c_GDEP073E01, GxEPD2_730c_GDEP073E01::HEIGHT>(
-            GxEPD2_730c_GDEP073E01(CS_PIN, DC_PIN, RST_PIN, BUSY_PIN)
-        );
+        drv->epd2.setBusyCallback(epd_busy_callback);
+        _display = drv;
     } else {
-        // default / fallback: "spectra6_7in3"
-        _current_profile = "spectra6_7in3";
-        _display = new GxEPD2_BW<GxEPD2_730c_GDEP073E01, GxEPD2_730c_GDEP073E01::HEIGHT>(
+        // default / fallback: "spectra6_7in3", "mono_800x480", "custom"
+        if (profile != "mono_800x480" && profile != "custom") {
+            _current_profile = "spectra6_7in3";
+        }
+        auto* drv = new GxEPD2_7C<GxEPD2_730c_GDEP073E01, MAX_HEIGHT_7C(GxEPD2_730c_GDEP073E01)>(
             GxEPD2_730c_GDEP073E01(CS_PIN, DC_PIN, RST_PIN, BUSY_PIN)
         );
+        drv->epd2.setBusyCallback(epd_busy_callback);
+        _display = drv;
     }
     Serial.printf("[DisplayManager] Instantiated driver for profile: %s (resolution: %dx%d)\n",
                   _current_profile.c_str(), _display->width(), _display->height());

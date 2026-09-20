@@ -84,6 +84,10 @@ bool drawRAW(const char *filename)
 
     for (int16_t y = 0; y < h; y++)
     {
+      if ((y % 20) == 0)
+      {
+        vTaskDelay(pdMS_TO_TICKS(1));
+      }
       size_t n = rawFile.read(rowBuffer, rowSize);
       if (n != rowSize)
       {
@@ -255,6 +259,13 @@ void setup()
 {
   Serial.begin(115200);
   delay(2000);
+
+  // Disable hardware watchdogs to prevent reset during long e-paper refresh cycles (~15s)
+  disableCore0WDT();
+#ifndef CONFIG_FREERTOS_UNICORE
+  disableCore1WDT();
+#endif
+  disableLoopWDT();
 
   pinMode(KEY1_PIN, INPUT_PULLUP);
 

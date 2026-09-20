@@ -68,6 +68,7 @@ bool drawRAW(const char *filename)
   disp->setRotation(0);
   disp->setFullWindow();
 
+  Serial.printf("RAW: Rendering pixels to e-paper panel (%dx%d)... refresh in progress\n", w, h);
   disp->firstPage();
   do
   {
@@ -146,21 +147,29 @@ void clearToWhite()
 }
 
 static void display_init_and_draw_raw() {
+  Serial.println("[Display] Initializing e-paper display hardware...");
   SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
   GxEPD2_GFX* disp = DisplayManager::instance().get_display();
   disp->init(115200, true, 2, false);
   disp->setRotation(0);
   disp->setFullWindow();
+  Serial.println("[Display] Reading and rendering /display.raw...");
   if (drawRAW("/display.raw")) {
     showing_content = true;
+    Serial.println("[Display] RAW render successful.");
   } else {
+    Serial.println("[Display] RAW render failed, showing fallback screen.");
     provisioning_screen_draw_no_content(device_get_id());
     showing_content = false;
   }
-  if (showing_content) disp->powerOff();
+  if (showing_content) {
+    Serial.println("[Display] Powering off panel controller to preserve e-ink.");
+    disp->powerOff();
+  }
 }
 
 static void display_init_and_draw_no_content() {
+  Serial.println("[Display] Showing 'No Content' placeholder screen...");
   SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
   GxEPD2_GFX* disp = DisplayManager::instance().get_display();
   disp->init(115200, true, 2, false);
@@ -168,6 +177,7 @@ static void display_init_and_draw_no_content() {
   disp->setFullWindow();
   provisioning_screen_draw_no_content(device_get_id());
   showing_content = false;
+  disp->powerOff();
 }
 
 static void enter_deep_sleep(unsigned long sleep_ms = 0) {
@@ -177,27 +187,30 @@ static void enter_deep_sleep(unsigned long sleep_ms = 0) {
   DisplayManager::instance().power_off();
   esp_sleep_enable_timer_wakeup((uint64_t)sleep_ms * 1000ULL);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)KEY1_PIN, 0); // GPIO2 wakes on LOW
-  Serial.printf("Deep sleep %lus (KEY1 wakes)\n", sleep_ms / 1000UL);
+  Serial.printf("[Power] Deep sleep %lus (KEY1 wakes)\n", sleep_ms / 1000UL);
   esp_deep_sleep_start();
 }
 
 static void initial_fetch_and_display() {
+  Serial.println("[Setup] Logging in to backend...");
   if (!device_login(cfg, device_token)) {
+    Serial.println("[Setup] Device login failed.");
     display_init_and_draw_no_content();
     return;
   }
 
   DeviceStatus status;
+  Serial.println("[Setup] Checking in with backend...");
   FetchResult ci = http_check_in(cfg, device_token, status);
   if (ci == FetchResult::OK) {
     if (status.refresh_rate > 0 && status.refresh_rate != cfg.refresh_rate) {
-      Serial.printf("Backend refresh rate update: %d -> %d s\n", cfg.refresh_rate, status.refresh_rate);
+      Serial.printf("[Setup] Backend refresh rate update: %d -> %d s\n", cfg.refresh_rate, status.refresh_rate);
       cfg.refresh_rate = status.refresh_rate;
       config_save(cfg);
     }
     refresh_rate_ms = (unsigned long)(cfg.refresh_rate > 0 ? cfg.refresh_rate : status.refresh_rate) * 1000UL;
     if (status.display_profile.length() > 0 && status.display_profile != cfg.display_profile) {
-      Serial.printf("Backend profile update: %s -> %s\n", cfg.display_profile.c_str(), status.display_profile.c_str());
+      Serial.printf("[Setup] Backend profile update: %s -> %s\n", cfg.display_profile.c_str(), status.display_profile.c_str());
       cfg.display_profile = status.display_profile;
       config_save(cfg);
       DisplayManager::instance().switch_profile(cfg.display_profile);
@@ -205,30 +218,36 @@ static void initial_fetch_and_display() {
   }
 
   if (ci == FetchResult::OK && status.has_image && !status.content_changed) {
+    Serial.println("[Setup] Content has not changed, rendering cached image...");
     display_init_and_draw_raw();
     return;
   }
 
   if (ci == FetchResult::OK && status.has_image && status.content_changed) {
+    Serial.println("[Setup] Content changed, fetching new image from backend...");
     FetchResult fr = http_fetch_display_with_token(cfg, device_token);
     if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
       display_init_and_draw_raw();
     } else {
+      Serial.println("[Setup] Display fetch failed, showing placeholder.");
       display_init_and_draw_no_content();
     }
     return;
   }
 
   if (ci != FetchResult::OK) {
+    Serial.println("[Setup] Check-in failed, attempting direct fetch...");
     FetchResult fr = http_fetch_display_with_token(cfg, device_token);
     if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
       display_init_and_draw_raw();
     } else {
+      Serial.println("[Setup] Direct fetch failed, showing placeholder.");
       display_init_and_draw_no_content();
     }
     return;
   }
 
+  Serial.println("[Setup] No image assigned to this device.");
   display_init_and_draw_no_content();
 }
 

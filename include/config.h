@@ -3,9 +3,7 @@
 
 #include <Arduino.h>
 
-// Deep-sleep interval until the backend owns the sleep schedule (15 min).
-// Backend task: return sleep/wake schedule in device check-in response.
-#define DEEP_SLEEP_INTERVAL_MS (15UL * 60UL * 1000UL)
+#define DEFAULT_REFRESH_RATE_S 300UL
 
 struct DeviceConfig {
   String ssid;
@@ -13,6 +11,8 @@ struct DeviceConfig {
   String api_url;
   String hardware_id;
   String device_secret;
+  String display_profile;
+  int refresh_rate;
 };
 
 bool config_load(DeviceConfig &cfg);

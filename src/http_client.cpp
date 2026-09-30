@@ -84,7 +84,7 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
   if (!validate_config(cfg)) return FetchResult::ERROR;
 
   // Defaults
-  out_status = { -1, 300, false, false };
+  out_status = { -1, 300, false, false, "", 800, 480 };
 
   String url = cfg.api_url + "/devices/check-in";
   std::unique_ptr<WiFiClient> client(make_client(url));
@@ -124,12 +124,16 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
   out_status.refresh_rate = doc["refreshRate"].as<int>();
   out_status.has_image = doc["hasImage"].as<bool>();
   out_status.content_changed = doc["contentChanged"].as<bool>();
+  out_status.display_profile = doc["displayProfile"].as<String>();
+  out_status.width = doc["width"].is<int>() ? doc["width"].as<int>() : 800;
+  out_status.height = doc["height"].is<int>() ? doc["height"].as<int>() : 480;
 
   if (out_status.refresh_rate <= 0) out_status.refresh_rate = 300;
 
-  Serial.printf("[HttpClient] Check-in OK: screenId=%d refreshRate=%d hasImage=%d contentChanged=%d\n",
+  Serial.printf("[HttpClient] Check-in OK: screenId=%d refreshRate=%d hasImage=%d contentChanged=%d profile=%s (%dx%d)\n",
                 out_status.screen_id, out_status.refresh_rate,
-                out_status.has_image, out_status.content_changed);
+                out_status.has_image, out_status.content_changed,
+                out_status.display_profile.c_str(), out_status.width, out_status.height);
   return FetchResult::OK;
 }
 
@@ -153,18 +157,23 @@ FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String 
   }
 
   String display_url = cfg.api_url + "/devices/display";
+  Serial.printf("[HttpClient] Fetching display from: %s (free heap: %u bytes)\n", display_url.c_str(), (unsigned)ESP.getFreeHeap());
+
   std::unique_ptr<WiFiClient> client(make_client(display_url));
+  client->setTimeout(30);
+  http.setTimeout(30000);
   http.begin(*client, display_url);
   http.addHeader("Authorization", "Bearer " + token);
   if (etag.length() > 0) {
     http.addHeader("If-None-Match", etag);
   }
 
-  const char *headerKeys[] = {"ETag"};
-  http.collectHeaders(headerKeys, 1);
+  const char *headerKeys[] = {"ETag", "Content-Length"};
+  http.collectHeaders(headerKeys, 2);
 
+  Serial.println("[HttpClient] Sending GET /devices/display...");
   int display_code = http.GET();
-  Serial.printf("[HttpClient] GET %s -> HTTP %d\n", display_url.c_str(), display_code);
+  Serial.printf("[HttpClient] GET %s -> HTTP %d (%s)\n", display_url.c_str(), display_code, http.errorToString(display_code).c_str());
 
   if (display_code == 304) {
     Serial.printf("[HttpClient] 304 Not Modified - reusing cache\n");
@@ -179,10 +188,13 @@ FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String 
   }
 
   if (display_code != 200) {
-    Serial.printf("[HttpClient] Display fetch failed: HTTP %d\n", display_code);
+    Serial.printf("[HttpClient] Display fetch failed: HTTP %d (%s)\n", display_code, http.errorToString(display_code).c_str());
     http.end();
     return FetchResult::ERROR;
   }
+
+  int content_length = http.getSize();
+  Serial.printf("[HttpClient] Connected to stream, Content-Length: %d bytes\n", content_length);
 
   // Stream body to /display.raw
   WiFiClient *stream = http.getStreamPtr();
@@ -193,16 +205,50 @@ FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String 
     return FetchResult::ERROR;
   }
 
-  uint8_t buf[512];
+  uint8_t buf[1024];
   size_t total = 0;
-  while (http.connected() || stream->available()) {
+  unsigned long last_progress_ms = millis();
+  unsigned long last_read_ms = millis();
+
+  while (content_length > 0 ? (total < (size_t)content_length) : (http.connected() || stream->available())) {
+    bool bytes_read = false;
     while (stream->available()) {
-      int len = stream->read(buf, sizeof(buf));
+      size_t to_read = sizeof(buf);
+      if (content_length > 0 && ((size_t)content_length - total) < to_read) {
+        to_read = (size_t)content_length - total;
+      }
+      int len = stream->read(buf, to_read);
       if (len > 0) {
         file.write(buf, len);
         total += len;
+        bytes_read = true;
+        last_read_ms = millis();
+      }
+      if (content_length > 0 && total >= (size_t)content_length) {
+        break;
       }
     }
+
+    if (content_length > 0 && total >= (size_t)content_length) {
+      break;
+    }
+
+    if (millis() - last_progress_ms > 1000 && total > 0) {
+      if (content_length > 0) {
+        Serial.printf("[HttpClient] Streamed %u / %d bytes (%u%%)...\n",
+                      (unsigned)total, content_length, (unsigned)(total * 100 / content_length));
+      } else {
+        Serial.printf("[HttpClient] Streamed %u bytes...\n", (unsigned)total);
+      }
+      last_progress_ms = millis();
+    }
+
+    // Guard against socket hang (10s with no data)
+    if (!bytes_read && (millis() - last_read_ms > 10000)) {
+      Serial.println("[HttpClient] Stream read timeout (10s without data)");
+      break;
+    }
+
     delay(1);
   }
   file.close();
@@ -212,7 +258,7 @@ FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String 
     http.end();
     return FetchResult::ERROR;
   }
-  Serial.printf("[HttpClient] Written %u bytes to /display.raw\n", (unsigned)total);
+  Serial.printf("[HttpClient] Download complete: %u bytes written to /display.raw\n", (unsigned)total);
 
   // Save ETag if present
   String new_etag = http.header("ETag");

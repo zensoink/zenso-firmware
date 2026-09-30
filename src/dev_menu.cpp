@@ -1,24 +1,12 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <SPI.h>
-#include <GxEPD2_7C.h>
-#include <epd7c/GxEPD2_730c_ACeP_730.h>
+#include "display_manager.h"
 #include "dev_menu.h"
 #include "provisioning_screen.h"
 #include "version.h"
 #include "pins.h"
 #include "device_identity.h"
-
-#ifndef MAX_DISPLAY_BUFFER_SIZE
-#define MAX_DISPLAY_BUFFER_SIZE 65536ul
-#endif
-
-#ifndef MAX_HEIGHT_7C
-#define MAX_HEIGHT_7C(EPD) ((EPD::HEIGHT <= (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 2)) ? \
-                            EPD::HEIGHT : (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 2))
-#endif
-
-extern GxEPD2_7C<GxEPD2_730c_ACeP_730, MAX_HEIGHT_7C(GxEPD2_730c_ACeP_730)> display;
 
 extern bool drawRAW(const char *filename);
 extern void clearToWhite();
@@ -51,11 +39,12 @@ void handle_dev_command(char cmd, DeviceConfig &cfg) {
   if (cmd == 'r' || cmd == 'R') {
     Serial.println("Re-rendering RAW...");
     SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
-    display.init(115200, true, 2, false);
-    display.setRotation(0);
-    display.setFullWindow();
+    GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+    disp->init(115200, true, 2, false);
+    disp->setRotation(0);
+    disp->setFullWindow();
     drawRAW("/display.raw");
-    display.powerOff();
+    disp->powerOff();
     return;
   }
 

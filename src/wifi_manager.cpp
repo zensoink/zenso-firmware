@@ -8,6 +8,7 @@
 #include "device_identity.h"
 #include "portal_html.h"
 #include "pins.h"
+#include "display_manager.h"
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -140,9 +141,10 @@ void wifi_start_provisioning(DeviceConfig &cfg) {
     body["firmware_version"] = FIRMWARE_VERSION;
     body["hardware_info"] = JsonObject();
     JsonObject display_info = body["display_info"].to<JsonObject>();
-    display_info["width"] = 800;
-    display_info["height"] = 480;
-    display_info["colors"] = 7;
+    GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+    display_info["width"] = disp->width();
+    display_info["height"] = disp->height();
+    display_info["model"] = cfg.display_profile;
 
     String request_body;
     serializeJson(body, request_body);

@@ -3,8 +3,7 @@
 #include <SPI.h>
 #include <esp_sleep.h>
 #include <LittleFS.h>
-#include <GxEPD2_7C.h>
-#include <epd7c/GxEPD2_730c_ACeP_730.h>
+#include "display_manager.h"
 #include "config.h"
 #include "device_identity.h"
 #include "pins.h"
@@ -13,19 +12,6 @@
 #include "http_client.h"
 #include "provisioning_screen.h"
 #include "dev_menu.h"
-
-#ifndef MAX_DISPLAY_BUFFER_SIZE
-#define MAX_DISPLAY_BUFFER_SIZE 65536ul
-#endif
-
-#ifndef MAX_HEIGHT_7C
-#define MAX_HEIGHT_7C(EPD) ((EPD::HEIGHT <= (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 2)) ? \
-                            EPD::HEIGHT : (MAX_DISPLAY_BUFFER_SIZE) / (EPD::WIDTH / 2))
-#endif
-
-GxEPD2_7C<GxEPD2_730c_ACeP_730, MAX_HEIGHT_7C(GxEPD2_730c_ACeP_730)> display(
-  GxEPD2_730c_ACeP_730(CS_PIN, DC_PIN, RST_PIN, BUSY_PIN)
-);
 
 static const uint16_t epdPalette[7] = {
   GxEPD_BLACK,
@@ -42,6 +28,9 @@ static String device_token;
 static bool showing_content = false;
 static unsigned long last_check_in_ms = 0;
 static unsigned long refresh_rate_ms = 60000;
+RTC_DATA_ATTR static int retry_count = 0;
+static const int MAX_RETRY_COUNT = 3;
+static const unsigned long RETRY_INTERVAL_S = 60; // 1 minute fast retry
 
 bool drawRAW(const char *filename)
 {
@@ -52,8 +41,9 @@ bool drawRAW(const char *filename)
     return false;
   }
 
-  const int16_t w = display.width();
-  const int16_t h = display.height();
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  const int16_t w = disp->width();
+  const int16_t h = disp->height();
   const uint32_t rowSize = (w + 1) / 2;
   const uint32_t expectedSize = rowSize * h;
 
@@ -78,13 +68,14 @@ bool drawRAW(const char *filename)
 
   uint32_t colorCount[16] = {0};
 
-  display.setRotation(0);
-  display.setFullWindow();
+  disp->setRotation(0);
+  disp->setFullWindow();
 
-  display.firstPage();
+  Serial.printf("RAW: Rendering pixels to e-paper panel (%dx%d)... refresh in progress\n", w, h);
+  disp->firstPage();
   do
   {
-    display.fillScreen(GxEPD_WHITE);
+    disp->fillScreen(GxEPD_WHITE);
 
     if (!rawFile.seek(0))
     {
@@ -96,6 +87,10 @@ bool drawRAW(const char *filename)
 
     for (int16_t y = 0; y < h; y++)
     {
+      if ((y % 20) == 0)
+      {
+        vTaskDelay(pdMS_TO_TICKS(1));
+      }
       size_t n = rawFile.read(rowBuffer, rowSize);
       if (n != rowSize)
       {
@@ -114,19 +109,19 @@ bool drawRAW(const char *filename)
         uint8_t pixel2 = val & 0x0F;
 
         colorCount[pixel1]++;
-        display.drawPixel(x, y, (pixel1 < 7) ? epdPalette[pixel1] : GxEPD_WHITE);
+        disp->drawPixel(x, y, (pixel1 < 7) ? epdPalette[pixel1] : GxEPD_WHITE);
         x++;
 
         if (x < w)
         {
           colorCount[pixel2]++;
-          display.drawPixel(x, y, (pixel2 < 7) ? epdPalette[pixel2] : GxEPD_WHITE);
+          disp->drawPixel(x, y, (pixel2 < 7) ? epdPalette[pixel2] : GxEPD_WHITE);
           x++;
         }
       }
     }
   }
-  while (display.nextPage());
+  while (disp->nextPage());
 
   for (int i = 0; i < 16; i++)
   {
@@ -142,92 +137,134 @@ bool drawRAW(const char *filename)
 void clearToWhite()
 {
   Serial.println("Clearing screen...");
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  disp->init(115200, true, 2, false);
+  disp->setRotation(0);
+  disp->setFullWindow();
 
-  display.init(115200, true, 2, false);
-  display.setRotation(0);
-  display.setFullWindow();
-
-  display.firstPage();
+  disp->firstPage();
   do
   {
-    display.fillScreen(GxEPD_WHITE);
+    disp->fillScreen(GxEPD_WHITE);
   }
-  while (display.nextPage());
+  while (disp->nextPage());
 
-  display.powerOff();
+  disp->powerOff();
   Serial.println("Screen cleared");
 }
 
-// ponytail: display helpers wrap init+draw+powerOff in one call
 static void display_init_and_draw_raw() {
+  Serial.println("[Display] Initializing e-paper display hardware...");
   SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
-  display.init(115200, true, 2, false);
-  display.setRotation(0);
-  display.setFullWindow();
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  disp->init(115200, true, 2, false);
+  disp->setRotation(0);
+  disp->setFullWindow();
+  Serial.println("[Display] Reading and rendering /display.raw...");
   if (drawRAW("/display.raw")) {
     showing_content = true;
+    Serial.println("[Display] RAW render successful.");
   } else {
+    Serial.println("[Display] RAW render failed, showing fallback screen.");
     provisioning_screen_draw_no_content(device_get_id());
     showing_content = false;
   }
-  if (showing_content) display.powerOff();
+  if (showing_content) {
+    Serial.println("[Display] Powering off panel controller to preserve e-ink.");
+    disp->powerOff();
+  }
 }
 
 static void display_init_and_draw_no_content() {
+  Serial.println("[Display] Showing 'No Content' placeholder screen...");
   SPI.begin(SCK_PIN, -1, MOSI_PIN, CS_PIN);
-  display.init(115200, true, 2, false);
-  display.setRotation(0);
-  display.setFullWindow();
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  disp->init(115200, true, 2, false);
+  disp->setRotation(0);
+  disp->setFullWindow();
   provisioning_screen_draw_no_content(device_get_id());
   showing_content = false;
+  disp->powerOff();
 }
 
-static void enter_deep_sleep() {
-  display.powerOff();
-  esp_sleep_enable_timer_wakeup((uint64_t)DEEP_SLEEP_INTERVAL_MS * 1000ULL);
+static void enter_deep_sleep(unsigned long sleep_ms = 0) {
+  if (sleep_ms < 10000UL) {
+    sleep_ms = (cfg.refresh_rate > 0 ? (unsigned long)cfg.refresh_rate : DEFAULT_REFRESH_RATE_S) * 1000UL;
+  }
+  DisplayManager::instance().power_off();
+  esp_sleep_enable_timer_wakeup((uint64_t)sleep_ms * 1000ULL);
   esp_sleep_enable_ext0_wakeup((gpio_num_t)KEY1_PIN, 0); // GPIO2 wakes on LOW
-  Serial.printf("Deep sleep %us (KEY1 wakes)\n", DEEP_SLEEP_INTERVAL_MS / 1000);
+  Serial.printf("[Power] Deep sleep %lus (KEY1 wakes)\n", sleep_ms / 1000UL);
   esp_deep_sleep_start();
 }
 
-static void initial_fetch_and_display() {
+static bool initial_fetch_and_display() {
+  Serial.println("[Setup] Logging in to backend...");
   if (!device_login(cfg, device_token)) {
-    display_init_and_draw_no_content();
-    return;
+    Serial.println("[Setup] Device login failed.");
+    if (!LittleFS.exists("/display.raw") && !showing_content) {
+      display_init_and_draw_no_content();
+    }
+    return false;
   }
 
   DeviceStatus status;
+  Serial.println("[Setup] Checking in with backend...");
   FetchResult ci = http_check_in(cfg, device_token, status);
   if (ci == FetchResult::OK) {
-    refresh_rate_ms = (unsigned long)status.refresh_rate * 1000UL;
+    if (status.refresh_rate > 0 && status.refresh_rate != cfg.refresh_rate) {
+      Serial.printf("[Setup] Backend refresh rate update: %d -> %d s\n", cfg.refresh_rate, status.refresh_rate);
+      cfg.refresh_rate = status.refresh_rate;
+      config_save(cfg);
+    }
+    refresh_rate_ms = (unsigned long)(cfg.refresh_rate > 0 ? cfg.refresh_rate : status.refresh_rate) * 1000UL;
+    if (status.display_profile.length() > 0 && status.display_profile != cfg.display_profile) {
+      Serial.printf("[Setup] Backend profile update: %s -> %s\n", cfg.display_profile.c_str(), status.display_profile.c_str());
+      cfg.display_profile = status.display_profile;
+      config_save(cfg);
+      DisplayManager::instance().switch_profile(cfg.display_profile);
+    }
   }
 
   if (ci == FetchResult::OK && status.has_image && !status.content_changed) {
+    Serial.println("[Setup] Content has not changed, rendering cached image...");
     display_init_and_draw_raw();
-    return;
+    return true;
   }
 
   if (ci == FetchResult::OK && status.has_image && status.content_changed) {
+    Serial.println("[Setup] Content changed, fetching new image from backend...");
     FetchResult fr = http_fetch_display_with_token(cfg, device_token);
     if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
       display_init_and_draw_raw();
+      return true;
     } else {
-      display_init_and_draw_no_content();
+      Serial.println("[Setup] Display fetch failed — preserving existing screen.");
+      if (!LittleFS.exists("/display.raw") && !showing_content) {
+        display_init_and_draw_no_content();
+      }
+      return false;
     }
-    return;
   }
 
   if (ci != FetchResult::OK) {
+    Serial.println("[Setup] Check-in failed, attempting direct fetch...");
     FetchResult fr = http_fetch_display_with_token(cfg, device_token);
     if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
       display_init_and_draw_raw();
+      return true;
     } else {
-      display_init_and_draw_no_content();
+      Serial.println("[Setup] Direct fetch failed — preserving existing screen.");
+      if (!LittleFS.exists("/display.raw") && !showing_content) {
+        display_init_and_draw_no_content();
+      }
+      return false;
     }
-    return;
   }
 
+  Serial.println("[Setup] No image assigned to this device.");
   display_init_and_draw_no_content();
+  return true;
 }
 
 void setup()
@@ -235,7 +272,20 @@ void setup()
   Serial.begin(115200);
   delay(2000);
 
+  // Disable hardware watchdogs to prevent reset during long e-paper refresh cycles (~15s)
+  disableCore0WDT();
+#ifndef CONFIG_FREERTOS_UNICORE
+  disableCore1WDT();
+#endif
+  disableLoopWDT();
+
   pinMode(KEY1_PIN, INPUT_PULLUP);
+
+  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+  if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
+    Serial.println("[Power] Woken by KEY1 button press — resetting retry counter");
+    retry_count = 0;
+  }
 
   Serial.println("\n===== START =====");
 
@@ -248,6 +298,9 @@ void setup()
   Serial.println("LittleFS OK");
 
   config_load(cfg);
+  if (cfg.refresh_rate <= 0) cfg.refresh_rate = DEFAULT_REFRESH_RATE_S;
+  refresh_rate_ms = (unsigned long)cfg.refresh_rate * 1000UL;
+  DisplayManager::instance().init(cfg.display_profile);
 
   DeviceIdentity identity = identity_load();
 
@@ -305,9 +358,22 @@ void setup()
       }
     }
   } else if (!wifi_connect(cfg)) {
-    Serial.println("Setup: WiFi connection failed — starting provisioning mode");
-    wifi_start_provisioning(cfg);
-    {
+    if (cfg.device_secret.length() > 0) {
+      Serial.println("Setup: WiFi connection failed for claimed device");
+      retry_count++;
+      if (retry_count <= MAX_RETRY_COUNT) {
+        Serial.printf("[Power] WiFi failed (attempt %d/%d). Fast retry in %lus...\n",
+                      retry_count, MAX_RETRY_COUNT, RETRY_INTERVAL_S);
+        enter_deep_sleep(RETRY_INTERVAL_S * 1000UL);
+      } else {
+        retry_count = 0;
+        Serial.printf("[Power] Max retries reached (%d/%d). Falling back to normal schedule (%lus)...\n",
+                      MAX_RETRY_COUNT, MAX_RETRY_COUNT, refresh_rate_ms / 1000UL);
+        enter_deep_sleep(refresh_rate_ms);
+      }
+    } else {
+      Serial.println("Setup: WiFi connection failed — starting provisioning mode");
+      wifi_start_provisioning(cfg);
       DeviceIdentity post_identity = identity_load();
       if (post_identity.hardware_id.length() > 0 && post_identity.device_secret.length() > 0) {
         cfg.hardware_id = post_identity.hardware_id;
@@ -323,22 +389,38 @@ void setup()
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Setup: WiFi lost after connect, reconnecting...");
     if (!wifi_connect(cfg)) {
-      Serial.println("Setup: WiFi reconnect failed — starting provisioning mode");
-      wifi_start_provisioning(cfg);
-      DeviceIdentity post_identity = identity_load();
-      if (post_identity.hardware_id.length() > 0 && post_identity.device_secret.length() > 0) {
-        cfg.hardware_id = post_identity.hardware_id;
-        cfg.device_secret = post_identity.device_secret;
+      if (cfg.device_secret.length() > 0) {
+        retry_count++;
+        enter_deep_sleep(retry_count <= MAX_RETRY_COUNT ? RETRY_INTERVAL_S * 1000UL : refresh_rate_ms);
+      } else {
+        Serial.println("Setup: WiFi reconnect failed — starting provisioning mode");
+        wifi_start_provisioning(cfg);
       }
     }
   }
 
   // First fetch: login + check-in + display
-  initial_fetch_and_display();
+  bool update_success = initial_fetch_and_display();
 
   // Provisioning runs a blocking loop, so reaching here means we are claimed.
   if (cfg.device_secret.length() > 0) {
-    enter_deep_sleep();
+    if (update_success) {
+      retry_count = 0;
+      Serial.printf("[Power] Update successful. Normal sleep for %lus\n", refresh_rate_ms / 1000UL);
+      enter_deep_sleep(refresh_rate_ms);
+    } else {
+      retry_count++;
+      if (retry_count <= MAX_RETRY_COUNT) {
+        Serial.printf("[Power] Update failed (attempt %d/%d). Fast retry in %lus...\n",
+                      retry_count, MAX_RETRY_COUNT, RETRY_INTERVAL_S);
+        enter_deep_sleep(RETRY_INTERVAL_S * 1000UL);
+      } else {
+        retry_count = 0;
+        Serial.printf("[Power] Max retries reached (%d/%d). Falling back to normal schedule (%lus)...\n",
+                      MAX_RETRY_COUNT, MAX_RETRY_COUNT, refresh_rate_ms / 1000UL);
+        enter_deep_sleep(refresh_rate_ms);
+      }
+    }
   }
 
   Serial.println("Setup: not provisioned — staying awake");
@@ -392,7 +474,18 @@ void loop()
     return;
   }
 
-  refresh_rate_ms = (unsigned long)status.refresh_rate * 1000UL;
+  if (status.refresh_rate > 0 && status.refresh_rate != cfg.refresh_rate) {
+    Serial.printf("Backend refresh rate update: %d -> %d s\n", cfg.refresh_rate, status.refresh_rate);
+    cfg.refresh_rate = status.refresh_rate;
+    config_save(cfg);
+  }
+  refresh_rate_ms = (unsigned long)(cfg.refresh_rate > 0 ? cfg.refresh_rate : status.refresh_rate) * 1000UL;
+  if (status.display_profile.length() > 0 && status.display_profile != cfg.display_profile) {
+    Serial.printf("Backend profile update: %s -> %s\n", cfg.display_profile.c_str(), status.display_profile.c_str());
+    cfg.display_profile = status.display_profile;
+    config_save(cfg);
+    DisplayManager::instance().switch_profile(cfg.display_profile);
+  }
 
   if (status.has_image && status.content_changed) {
     FetchResult fr = http_fetch_display_with_token(cfg, device_token);

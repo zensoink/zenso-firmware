@@ -73,4 +73,6 @@ zenso-firmware/
 
 ## License
 
-Open source. See individual library licenses.
+This project is licensed under the **GNU General Public License v3.0 (GPLv3)** — see the [LICENSE](LICENSE) file for details.
+
+This project statically links with the [`GxEPD2`](https://github.com/ZinggJM/GxEPD2) library (licensed under GPLv3), ensuring that any modifications or derivative firmware stay open source for the community.

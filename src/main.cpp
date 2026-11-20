@@ -33,13 +33,33 @@ RTC_DATA_ATTR static bool rtc_display_in_deep_sleep = false;
 RTC_DATA_ATTR static char rtc_cached_etag[64] = {0};
 RTC_DATA_ATTR static uint8_t rtc_offline_retry_count = 0;
 
-static uint32_t get_offline_backoff_seconds(uint8_t count) {
-  switch (count) {
-    case 0: return 300;   // 5m
-    case 1: return 900;   // 15m
-    case 2: return 1800;  // 30m
-    default: return 3600; // max 60m
+static void enter_deep_sleep(uint32_t sleep_ms = 0, bool bypass_display_power_off = false) {
+  if (sleep_ms < 10000UL) {
+    sleep_ms = (cfg.refresh_rate > 0 ? (uint32_t)cfg.refresh_rate : DEFAULT_REFRESH_RATE_S) * 1000UL;
   }
+  if (!bypass_display_power_off) {
+    DisplayManager::instance().power_off();
+  }
+  esp_sleep_enable_timer_wakeup((uint64_t)sleep_ms * 1000ULL);
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)KEY1_PIN, 0); // GPIO2 wakes on LOW
+  Serial.printf("[Power] Deep sleep %" PRIu32 " ms (KEY1 wakes)\n", sleep_ms);
+  esp_deep_sleep_start();
+}
+
+static void handle_offline_backoff(bool silent = false) {
+  uint32_t backoff_s = 300;
+  switch (rtc_offline_retry_count) {
+    case 0: backoff_s = 300; break;
+    case 1: backoff_s = 900; break;
+    case 2: backoff_s = 1800; break;
+    default: backoff_s = 3600; break;
+  }
+  if (rtc_offline_retry_count < 255) {
+    rtc_offline_retry_count++;
+  }
+  Serial.printf("[Power] Offline failure (attempt %u). Backoff sleep for %" PRIu32 " s (silent=%d)...\n",
+                rtc_offline_retry_count, backoff_s, silent ? 1 : 0);
+  enter_deep_sleep(backoff_s * 1000UL, silent);
 }
 
 bool drawRAW(const char *filename)
@@ -199,18 +219,6 @@ static void display_init_and_draw_no_content() {
   disp->powerOff();
 }
 
-static void enter_deep_sleep(uint32_t sleep_seconds = 0, bool bypass_display_power_off = false) {
-  if (sleep_seconds < 10) {
-    sleep_seconds = (cfg.refresh_rate > 0 ? (uint32_t)cfg.refresh_rate : DEFAULT_REFRESH_RATE_S);
-  }
-  if (!bypass_display_power_off) {
-    DisplayManager::instance().power_off();
-  }
-  esp_sleep_enable_timer_wakeup((uint64_t)sleep_seconds * 1000000ULL);
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)KEY1_PIN, 0); // GPIO2 wakes on LOW
-  Serial.printf("[Power] Deep sleep %us (KEY1 wakes)\n", (unsigned)sleep_seconds);
-  esp_deep_sleep_start();
-}
 
 void setup()
 {
@@ -227,12 +235,12 @@ void setup()
   pinMode(KEY1_PIN, INPUT_PULLUP);
 
   esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
-  const char* wakeup_reason = "boot";
+  WakeupReason wakeup_reason = WakeupReason::BOOT;
   if (wakeup_cause == ESP_SLEEP_WAKEUP_TIMER) {
-    wakeup_reason = "timer";
+    wakeup_reason = WakeupReason::TIMER;
     Serial.println("[Power] Woken by timer");
   } else if (wakeup_cause == ESP_SLEEP_WAKEUP_EXT0) {
-    wakeup_reason = "manual";
+    wakeup_reason = WakeupReason::MANUAL;
     Serial.println("[Power] Woken by KEY1 button press — resetting offline retry counter");
     rtc_offline_retry_count = 0;
   } else {
@@ -315,12 +323,7 @@ void setup()
   } else if (!wifi_connect(cfg)) {
     if (cfg.device_secret.length() > 0) {
       Serial.println("Setup: WiFi connection failed for claimed device");
-      uint32_t backoff_s = get_offline_backoff_seconds(rtc_offline_retry_count);
-      if (rtc_offline_retry_count < 255) rtc_offline_retry_count++;
-      bool silent = rtc_display_in_deep_sleep && (wakeup_cause == ESP_SLEEP_WAKEUP_TIMER);
-      Serial.printf("[Power] WiFi failed (attempt %u). Offline backoff %us (silent=%d)...\n",
-                    rtc_offline_retry_count, (unsigned)backoff_s, silent);
-      enter_deep_sleep(backoff_s, silent);
+      handle_offline_backoff(rtc_display_in_deep_sleep && (wakeup_reason == WakeupReason::TIMER));
     } else {
       Serial.println("Setup: WiFi connection failed — starting provisioning mode");
       wifi_start_provisioning(cfg);
@@ -340,12 +343,7 @@ void setup()
     Serial.println("Setup: WiFi lost after connect, reconnecting...");
     if (!wifi_connect(cfg)) {
       if (cfg.device_secret.length() > 0) {
-        uint32_t backoff_s = get_offline_backoff_seconds(rtc_offline_retry_count);
-        if (rtc_offline_retry_count < 255) rtc_offline_retry_count++;
-        bool silent = rtc_display_in_deep_sleep && (wakeup_cause == ESP_SLEEP_WAKEUP_TIMER);
-        Serial.printf("[Power] WiFi reconnect failed (attempt %u). Offline backoff %us (silent=%d)...\n",
-                      rtc_offline_retry_count, (unsigned)backoff_s, silent);
-        enter_deep_sleep(backoff_s, silent);
+        handle_offline_backoff(rtc_display_in_deep_sleep && (wakeup_reason == WakeupReason::TIMER));
       } else {
         Serial.println("Setup: WiFi reconnect failed — starting provisioning mode");
         wifi_start_provisioning(cfg);
@@ -358,12 +356,7 @@ void setup()
   if (!device_login(cfg, device_token)) {
     Serial.println("[Setup] Device login failed.");
     if (cfg.device_secret.length() > 0) {
-      uint32_t backoff_s = get_offline_backoff_seconds(rtc_offline_retry_count);
-      if (rtc_offline_retry_count < 255) rtc_offline_retry_count++;
-      bool silent = rtc_display_in_deep_sleep && (wakeup_cause == ESP_SLEEP_WAKEUP_TIMER);
-      Serial.printf("[Power] Login failed (attempt %u). Offline backoff %us (silent=%d)...\n",
-                    rtc_offline_retry_count, (unsigned)backoff_s, silent);
-      enter_deep_sleep(backoff_s, silent);
+      handle_offline_backoff(rtc_display_in_deep_sleep && (wakeup_reason == WakeupReason::TIMER));
     } else {
       if (!LittleFS.exists("/display.raw") && !showing_content) {
         display_init_and_draw_no_content();
@@ -373,30 +366,20 @@ void setup()
   }
 
   DeviceStatus status;
-  const char* display_state = rtc_display_in_deep_sleep ? "deep_sleep" : "active";
-  Serial.printf("[Setup] Checking in with backend (wakeup=%s, display=%s)...\n", wakeup_reason, display_state);
+  DisplayState display_state = rtc_display_in_deep_sleep ? DisplayState::DEEP_SLEEP : DisplayState::ACTIVE;
+  Serial.printf("[Setup] Checking in with backend (wakeup=%d, display=%d)...\n",
+                (int)wakeup_reason, (int)display_state);
   FetchResult ci = http_check_in(cfg, device_token, status, wakeup_reason, display_state);
 
   if (ci == FetchResult::SERVER_ERROR) {
-    uint32_t backoff_s = get_offline_backoff_seconds(rtc_offline_retry_count);
-    if (rtc_offline_retry_count < 255) rtc_offline_retry_count++;
-    bool silent = rtc_display_in_deep_sleep && (wakeup_cause == ESP_SLEEP_WAKEUP_TIMER);
-    Serial.printf("[Power] Check-in server error (attempt %u). Offline backoff %us (silent=%d)...\n",
-                  rtc_offline_retry_count, (unsigned)backoff_s, silent);
-    enter_deep_sleep(backoff_s, silent);
+    handle_offline_backoff(rtc_display_in_deep_sleep && (wakeup_reason == WakeupReason::TIMER));
   } else if (ci != FetchResult::OK) {
     Serial.println("[Setup] Check-in failed with error");
     if (cfg.device_secret.length() > 0) {
-      uint32_t backoff_s = get_offline_backoff_seconds(rtc_offline_retry_count);
-      if (rtc_offline_retry_count < 255) rtc_offline_retry_count++;
-      bool silent = rtc_display_in_deep_sleep && (wakeup_cause == ESP_SLEEP_WAKEUP_TIMER);
-      Serial.printf("[Power] Check-in error (attempt %u). Offline backoff %us (silent=%d)...\n",
-                    rtc_offline_retry_count, (unsigned)backoff_s, silent);
-      enter_deep_sleep(backoff_s, silent);
+      handle_offline_backoff(rtc_display_in_deep_sleep && (wakeup_reason == WakeupReason::TIMER));
     }
   } else {
     // FetchResult::OK
-    rtc_offline_retry_count = 0;
     if (status.refresh_rate > 0 && status.refresh_rate != cfg.refresh_rate) {
       Serial.printf("[Setup] Backend refresh rate update: %d -> %d s\n", cfg.refresh_rate, status.refresh_rate);
       cfg.refresh_rate = status.refresh_rate;
@@ -410,50 +393,41 @@ void setup()
       DisplayManager::instance().switch_profile(cfg.display_profile);
     }
 
-    if (!status.has_image) {
-      uint32_t sleep_s = status.refresh_rate > 0 ? (uint32_t)status.refresh_rate : (uint32_t)cfg.refresh_rate;
-      if (!rtc_display_in_deep_sleep) {
-        // AC2: First transition to 0W Deep Sleep
-        Serial.println("[Display] Entering 0W Deep Sleep: clearing display to white and powering off");
-        clearToWhite();
-        rtc_display_in_deep_sleep = true;
-        enter_deep_sleep(sleep_s, true);
-      } else {
-        // Already in 0W Deep Sleep
-        if (wakeup_cause == ESP_SLEEP_WAKEUP_TIMER) {
-          // AC3: Silent nighttime keepalive: completely bypass SPI and display init
-          Serial.printf("[Power] Silent nighttime keepalive: panel dark and quiet, sleeping for %us\n", (unsigned)sleep_s);
-          enter_deep_sleep(sleep_s, true);
-        } else if (wakeup_cause == ESP_SLEEP_WAKEUP_EXT0) {
-          // AC6: Manual wakeup in 0W Deep Sleep: visual action confirmation
-          Serial.printf("[Display] Manual wakeup in 0W Deep Sleep: visual confirmation\n");
-          clearToWhite();
-          enter_deep_sleep(sleep_s, true);
-        } else {
-          clearToWhite();
-          enter_deep_sleep(sleep_s, true);
-        }
-      }
-    } else {
-      // AC4: reset rtc_display_in_deep_sleep = false and draw scheduled content
-      rtc_display_in_deep_sleep = false;
-      uint32_t sleep_s = status.refresh_rate > 0 ? (uint32_t)status.refresh_rate : (uint32_t)cfg.refresh_rate;
-      if (status.content_changed) {
+    uint32_t sleep_ms = (status.refresh_rate > 0 ? (uint32_t)status.refresh_rate : (uint32_t)cfg.refresh_rate) * 1000UL;
+
+    // Server-dictated dumb execution
+    switch (status.action) {
+      case DisplayAction::RENDER: {
+        Serial.println("[Display] Server directive: RENDER");
         FetchResult fr = http_fetch_display_with_token(cfg, device_token, rtc_cached_etag, sizeof(rtc_cached_etag));
         if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
           display_init_and_draw_raw();
-          enter_deep_sleep(sleep_s, false);
+          rtc_display_in_deep_sleep = false;
+          rtc_offline_retry_count = 0;
+          enter_deep_sleep(sleep_ms, false);
         } else if (fr == FetchResult::SERVER_ERROR) {
-          uint32_t backoff_s = get_offline_backoff_seconds(rtc_offline_retry_count);
-          if (rtc_offline_retry_count < 255) rtc_offline_retry_count++;
-          enter_deep_sleep(backoff_s, false);
+          handle_offline_backoff(false);
         } else {
-          enter_deep_sleep(sleep_s, false);
+          enter_deep_sleep(sleep_ms, false);
         }
-      } else {
-        Serial.println("[Setup] Content not changed, rendering cached image...");
-        display_init_and_draw_raw();
-        enter_deep_sleep(sleep_s, false);
+        break;
+      }
+
+      case DisplayAction::CLEAR: {
+        Serial.println("[Display] Server directive: CLEAR");
+        clearToWhite();
+        rtc_display_in_deep_sleep = true;
+        rtc_offline_retry_count = 0;
+        enter_deep_sleep(sleep_ms, true);
+        break;
+      }
+
+      case DisplayAction::NONE:
+      default: {
+        Serial.printf("[Display] Server directive: NONE (silent=%d)\n", rtc_display_in_deep_sleep ? 1 : 0);
+        rtc_offline_retry_count = 0;
+        enter_deep_sleep(sleep_ms, rtc_display_in_deep_sleep);
+        break;
       }
     }
   }
@@ -502,8 +476,8 @@ void loop()
   }
 
   DeviceStatus status;
-  const char* display_state = rtc_display_in_deep_sleep ? "deep_sleep" : "active";
-  FetchResult cr = http_check_in(cfg, device_token, status, "boot", display_state);
+  DisplayState display_state = rtc_display_in_deep_sleep ? DisplayState::DEEP_SLEEP : DisplayState::ACTIVE;
+  FetchResult cr = http_check_in(cfg, device_token, status, WakeupReason::BOOT, display_state);
 
   if (cr == FetchResult::ERROR || cr == FetchResult::SERVER_ERROR) {
     device_token = "";
@@ -523,17 +497,27 @@ void loop()
     DisplayManager::instance().switch_profile(cfg.display_profile);
   }
 
-  if (status.has_image && status.content_changed) {
-    FetchResult fr = http_fetch_display_with_token(cfg, device_token, rtc_cached_etag, sizeof(rtc_cached_etag));
-    if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
-      display_init_and_draw_raw();
-      rtc_display_in_deep_sleep = false;
-    } else if (fr == FetchResult::ERROR || fr == FetchResult::SERVER_ERROR) {
-      device_token = "";
+  switch (status.action) {
+    case DisplayAction::RENDER: {
+      FetchResult fr = http_fetch_display_with_token(cfg, device_token, rtc_cached_etag, sizeof(rtc_cached_etag));
+      if (fr == FetchResult::OK || fr == FetchResult::NOT_MODIFIED) {
+        display_init_and_draw_raw();
+        rtc_display_in_deep_sleep = false;
+      } else if (fr == FetchResult::ERROR || fr == FetchResult::SERVER_ERROR) {
+        device_token = "";
+      }
+      break;
     }
-  } else if (!status.has_image && showing_content) {
-    display_init_and_draw_no_content();
-    rtc_display_in_deep_sleep = true;
+
+    case DisplayAction::CLEAR: {
+      clearToWhite();
+      rtc_display_in_deep_sleep = true;
+      break;
+    }
+
+    case DisplayAction::NONE:
+    default:
+      break;
   }
 
   delay(10);

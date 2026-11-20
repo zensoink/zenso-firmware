@@ -80,7 +80,7 @@ bool device_login(const DeviceConfig &cfg, String &out_token) {
 
 // ── Check-in ──
 
-FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceStatus &out_status) {
+FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceStatus &out_status, const char* wakeup_reason, const char* display_state) {
   if (!validate_config(cfg)) return FetchResult::ERROR;
 
   // Defaults
@@ -95,6 +95,12 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
 
   JsonDocument body_doc;
   body_doc["firmwareVersion"] = FIRMWARE_VERSION;
+  if (wakeup_reason != nullptr && strlen(wakeup_reason) > 0) {
+    body_doc["wakeupReason"] = wakeup_reason;
+  }
+  if (display_state != nullptr && strlen(display_state) > 0) {
+    body_doc["displayState"] = display_state;
+  }
   String body;
   serializeJson(body_doc, body);
 
@@ -103,6 +109,11 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
     Serial.println("[HttpClient] Check-in 401 — token expired");
     http.end();
     return FetchResult::ERROR;
+  }
+  if (code >= 500 && code <= 599) {
+    Serial.printf("[HttpClient] Check-in failed with server error: HTTP %d\n", code);
+    http.end();
+    return FetchResult::SERVER_ERROR;
   }
   if (code < 200 || code > 299) {
     Serial.printf("[HttpClient] Check-in failed: HTTP %d\n", code);
@@ -139,20 +150,25 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
 
 // ── Fetch display (with token) ──
 
-FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String &token) {
+FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String &token, char* rtc_etag, size_t rtc_etag_len) {
   if (!validate_config(cfg)) return FetchResult::ERROR;
 
   HTTPClient http;
 
   // Load saved ETag
   String etag;
-  File etag_file = LittleFS.open("/display.etag", "r");
-  if (etag_file) {
-    etag = etag_file.readString();
-    etag_file.close();
-    etag.trim();
-    if (etag.length() > 0) {
-      Serial.printf("[HttpClient] Loaded etag: %s\n", etag.c_str());
+  if (rtc_etag != nullptr && strlen(rtc_etag) > 0) {
+    etag = rtc_etag;
+    Serial.printf("[HttpClient] Using RTC cached etag: %s\n", etag.c_str());
+  } else {
+    File etag_file = LittleFS.open("/display.etag", "r");
+    if (etag_file) {
+      etag = etag_file.readString();
+      etag_file.close();
+      etag.trim();
+      if (etag.length() > 0) {
+        Serial.printf("[HttpClient] Loaded etag from flash: %s\n", etag.c_str());
+      }
     }
   }
 
@@ -185,6 +201,12 @@ FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String 
     Serial.println("[HttpClient] 404 — no screen assigned to this device");
     http.end();
     return FetchResult::NO_CONTENT;
+  }
+
+  if (display_code >= 500 && display_code <= 599) {
+    Serial.printf("[HttpClient] Display fetch server error: HTTP %d (%s)\n", display_code, http.errorToString(display_code).c_str());
+    http.end();
+    return FetchResult::SERVER_ERROR;
   }
 
   if (display_code != 200) {
@@ -263,11 +285,16 @@ FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String 
   // Save ETag if present
   String new_etag = http.header("ETag");
   if (new_etag.length() > 0) {
+    if (rtc_etag != nullptr && rtc_etag_len > 0) {
+      strncpy(rtc_etag, new_etag.c_str(), rtc_etag_len - 1);
+      rtc_etag[rtc_etag_len - 1] = '\0';
+      Serial.printf("[HttpClient] Saved etag to RTC memory: %s\n", rtc_etag);
+    }
     File ef = LittleFS.open("/display.etag", "w");
     if (ef) {
       ef.print(new_etag);
       ef.close();
-      Serial.printf("[HttpClient] Saved etag: %s\n", new_etag.c_str());
+      Serial.printf("[HttpClient] Saved etag to flash: %s\n", new_etag.c_str());
     }
   }
 

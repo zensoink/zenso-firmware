@@ -80,11 +80,11 @@ bool device_login(const DeviceConfig &cfg, String &out_token) {
 
 // ── Check-in ──
 
-FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceStatus &out_status) {
+FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceStatus &out_status, WakeupReason wakeup_reason, DisplayState display_state) {
   if (!validate_config(cfg)) return FetchResult::ERROR;
 
   // Defaults
-  out_status = { -1, 300, false, false, "", 800, 480 };
+  out_status = { DisplayAction::NONE, -1, 300, false, false, "", 800, 480 };
 
   String url = cfg.api_url + "/devices/check-in";
   std::unique_ptr<WiFiClient> client(make_client(url));
@@ -93,8 +93,19 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", "Bearer " + token);
 
+  const char* reason_str = "boot";
+  if (wakeup_reason == WakeupReason::TIMER) {
+    reason_str = "timer";
+  } else if (wakeup_reason == WakeupReason::MANUAL) {
+    reason_str = "manual";
+  }
+
+  const char* state_str = (display_state == DisplayState::DEEP_SLEEP) ? "deep_sleep" : "active";
+
   JsonDocument body_doc;
   body_doc["firmwareVersion"] = FIRMWARE_VERSION;
+  body_doc["wakeupReason"] = reason_str;
+  body_doc["displayState"] = state_str;
   String body;
   serializeJson(body_doc, body);
 
@@ -103,6 +114,11 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
     Serial.println("[HttpClient] Check-in 401 — token expired");
     http.end();
     return FetchResult::ERROR;
+  }
+  if (code >= 500 && code <= 599) {
+    Serial.printf("[HttpClient] Check-in failed with server error: HTTP %d\n", code);
+    http.end();
+    return FetchResult::SERVER_ERROR;
   }
   if (code < 200 || code > 299) {
     Serial.printf("[HttpClient] Check-in failed: HTTP %d\n", code);
@@ -120,6 +136,15 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
     return FetchResult::ERROR;
   }
 
+  String action_str = doc["action"].as<String>();
+  if (action_str == "render") {
+    out_status.action = DisplayAction::RENDER;
+  } else if (action_str == "clear") {
+    out_status.action = DisplayAction::CLEAR;
+  } else {
+    out_status.action = DisplayAction::NONE;
+  }
+
   out_status.screen_id = doc["screenId"].is<int>() ? doc["screenId"].as<int>() : -1;
   out_status.refresh_rate = doc["refreshRate"].as<int>();
   out_status.has_image = doc["hasImage"].as<bool>();
@@ -130,29 +155,34 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
 
   if (out_status.refresh_rate <= 0) out_status.refresh_rate = 300;
 
-  Serial.printf("[HttpClient] Check-in OK: screenId=%d refreshRate=%d hasImage=%d contentChanged=%d profile=%s (%dx%d)\n",
-                out_status.screen_id, out_status.refresh_rate,
-                out_status.has_image, out_status.content_changed,
-                out_status.display_profile.c_str(), out_status.width, out_status.height);
+  Serial.printf("[HttpClient] Check-in OK: action=%s screenId=%d refreshRate=%d hasImage=%d profile=%s (%dx%d)\n",
+                action_str.c_str(), out_status.screen_id, out_status.refresh_rate,
+                out_status.has_image, out_status.display_profile.c_str(),
+                out_status.width, out_status.height);
   return FetchResult::OK;
 }
 
 // ── Fetch display (with token) ──
 
-FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String &token) {
+FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String &token, char* rtc_etag, size_t rtc_etag_len) {
   if (!validate_config(cfg)) return FetchResult::ERROR;
 
   HTTPClient http;
 
   // Load saved ETag
   String etag;
-  File etag_file = LittleFS.open("/display.etag", "r");
-  if (etag_file) {
-    etag = etag_file.readString();
-    etag_file.close();
-    etag.trim();
-    if (etag.length() > 0) {
-      Serial.printf("[HttpClient] Loaded etag: %s\n", etag.c_str());
+  if (rtc_etag != nullptr && strlen(rtc_etag) > 0) {
+    etag = rtc_etag;
+    Serial.printf("[HttpClient] Using RTC cached etag: %s\n", etag.c_str());
+  } else {
+    File etag_file = LittleFS.open("/display.etag", "r");
+    if (etag_file) {
+      etag = etag_file.readString();
+      etag_file.close();
+      etag.trim();
+      if (etag.length() > 0) {
+        Serial.printf("[HttpClient] Loaded etag from flash: %s\n", etag.c_str());
+      }
     }
   }
 
@@ -185,6 +215,12 @@ FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String 
     Serial.println("[HttpClient] 404 — no screen assigned to this device");
     http.end();
     return FetchResult::NO_CONTENT;
+  }
+
+  if (display_code >= 500 && display_code <= 599) {
+    Serial.printf("[HttpClient] Display fetch server error: HTTP %d (%s)\n", display_code, http.errorToString(display_code).c_str());
+    http.end();
+    return FetchResult::SERVER_ERROR;
   }
 
   if (display_code != 200) {
@@ -260,15 +296,12 @@ FetchResult http_fetch_display_with_token(const DeviceConfig &cfg, const String 
   }
   Serial.printf("[HttpClient] Download complete: %u bytes written to /display.raw\n", (unsigned)total);
 
-  // Save ETag if present
+  // Save ETag to RTC slow memory (no flash wear)
   String new_etag = http.header("ETag");
-  if (new_etag.length() > 0) {
-    File ef = LittleFS.open("/display.etag", "w");
-    if (ef) {
-      ef.print(new_etag);
-      ef.close();
-      Serial.printf("[HttpClient] Saved etag: %s\n", new_etag.c_str());
-    }
+  if (new_etag.length() > 0 && rtc_etag != nullptr && rtc_etag_len > 0) {
+    strncpy(rtc_etag, new_etag.c_str(), rtc_etag_len - 1);
+    rtc_etag[rtc_etag_len - 1] = '\0';
+    Serial.printf("[HttpClient] Saved etag to RTC slow memory: %s\n", rtc_etag);
   }
 
   http.end();

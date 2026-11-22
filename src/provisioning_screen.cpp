@@ -3,6 +3,7 @@
 #include <qrcode.h>
 #include "display_manager.h"
 #include "pins.h"
+#include "version.h"
 #include "provisioning_screen.h"
 
 void provisioning_screen_init() {
@@ -275,6 +276,68 @@ void provisioning_screen_draw_no_content(const String &hardware_id) {
     disp->setTextSize(1);
     disp->print("Device ID: ");
     disp->print(hardware_id);
+
+    disp->setCursor(branding_x, branding_y);
+    disp->setTextSize(1);
+    disp->print("zenso.ink");
+
+  } while (disp->nextPage());
+
+  disp->powerOff();
+}
+
+void provisioning_screen_draw_updating(const String &target_version) {
+  provisioning_screen_init();
+  GxEPD2_GFX* disp = DisplayManager::instance().get_display();
+  const int16_t w = disp->width();
+  const int16_t h = disp->height();
+
+  const int16_t lx = (w < 600) ? 25 : 55;
+  const int16_t y_title = (h < 400) ? 40 : 100;
+  const int16_t y_body1 = (h < 400) ? 80 : 160;
+  const int16_t y_body2 = (h < 400) ? 115 : 200;
+  const int16_t y_body3 = (h < 400) ? 150 : 240;
+  const int16_t y_body4 = (h < 400) ? 185 : 280;
+  const int16_t branding_x = w - 100;
+  const int16_t branding_y = h - 25;
+
+  const uint8_t title_size = (w < 600) ? 2 : 3;
+  const uint8_t text_size = (w < 600) ? 1 : 2;
+
+  disp->firstPage();
+  do {
+    disp->fillScreen(GxEPD_WHITE);
+
+    disp->setTextColor(GxEPD_BLACK);
+    disp->setCursor(lx, y_title);
+    disp->setTextSize(title_size);
+    disp->print("Updating Firmware...");
+
+    disp->setCursor(lx, y_body1);
+    disp->setTextSize(text_size);
+    disp->print("Installing version: v");
+    disp->print(target_version);
+
+    disp->setCursor(lx, y_body2);
+    disp->setTextSize(text_size);
+    disp->print("Please do not turn off power or");
+
+    disp->setCursor(lx, y_body3);
+    disp->setTextSize(text_size);
+    disp->print("disconnect battery.");
+
+    disp->setCursor(lx, y_body4);
+    disp->setTextSize(text_size);
+    disp->print("Device will restart automatically.");
+
+    // Bottom branding and current version
+    String fw_str = "Current: v" + String(FIRMWARE_VERSION);
+    int16_t x1, y1;
+    uint16_t fw_w, fw_h;
+    disp->setTextSize(1);
+    disp->getTextBounds(fw_str, 0, 0, &x1, &y1, &fw_w, &fw_h);
+    disp->setCursor(branding_x - fw_w - 20, branding_y);
+    disp->print(fw_str);
 
     disp->setCursor(branding_x, branding_y);
     disp->setTextSize(1);

@@ -10,6 +10,7 @@
 #include "version.h"
 #include "wifi_manager.h"
 #include "http_client.h"
+#include "ota_manager.h"
 #include "provisioning_screen.h"
 #include "dev_menu.h"
 
@@ -198,6 +199,18 @@ static void enter_deep_sleep(unsigned long sleep_ms = 0) {
   esp_deep_sleep_start();
 }
 
+static void handle_ota_directive(const DeviceConfig &config, const String &token, const OtaDirective &directive) {
+  Serial.printf("[Main] OTA directive received! Halting sleep and executing update to v%s...\n",
+                directive.version.c_str());
+  if (!ota_manager_execute(config, token, directive)) {
+    if (LittleFS.exists("/display.raw")) {
+      display_init_and_draw_raw();
+    } else {
+      display_init_and_draw_no_content();
+    }
+  }
+}
+
 static bool initial_fetch_and_display() {
   Serial.println("[Setup] Logging in to backend...");
   if (!device_login(cfg, device_token)) {
@@ -210,8 +223,21 @@ static bool initial_fetch_and_display() {
 
   DeviceStatus status;
   Serial.println("[Setup] Checking in with backend...");
-  FetchResult ci = http_check_in(cfg, device_token, status);
+  String rep_status, rep_error;
+  bool has_rep = ota_manager_has_pending_report(rep_status, rep_error);
+  if (has_rep) {
+    Serial.printf("[Setup] Reporting pending OTA status: %s (error: %s)\n",
+                  rep_status.c_str(), rep_error.c_str());
+  }
+
+  FetchResult ci = http_check_in(cfg, device_token, status, has_rep ? rep_status : "", has_rep ? rep_error : "");
   if (ci == FetchResult::OK) {
+    if (has_rep) {
+      ota_manager_clear_pending_report();
+    }
+    if (ota_manager_is_pending_verify()) {
+      ota_manager_mark_app_valid();
+    }
     if (status.refresh_rate > 0 && status.refresh_rate != cfg.refresh_rate) {
       Serial.printf("[Setup] Backend refresh rate update: %d -> %d s\n", cfg.refresh_rate, status.refresh_rate);
       cfg.refresh_rate = status.refresh_rate;
@@ -223,6 +249,12 @@ static bool initial_fetch_and_display() {
       cfg.display_profile = status.display_profile;
       config_save(cfg);
       DisplayManager::instance().switch_profile(cfg.display_profile);
+    }
+
+    // Handle OTA directive
+    if (status.has_ota) {
+      handle_ota_directive(cfg, device_token, status.ota);
+      return false;
     }
   }
 
@@ -297,6 +329,8 @@ void setup()
 
   Serial.println("LittleFS OK");
 
+  ota_manager_init();
+
   config_load(cfg);
   if (cfg.refresh_rate <= 0) cfg.refresh_rate = DEFAULT_REFRESH_RATE_S;
   refresh_rate_ms = (unsigned long)cfg.refresh_rate * 1000UL;
@@ -358,6 +392,21 @@ void setup()
       }
     }
   } else if (!wifi_connect(cfg)) {
+    if (ota_manager_is_pending_verify()) {
+      Serial.println("[Setup] WiFi failed during PENDING_VERIFY! Retrying up to 3 times...");
+      bool wifi_ok = false;
+      for (uint8_t i = 0; i < 3; i++) {
+        delay(2000);
+        if (wifi_connect(cfg)) {
+          wifi_ok = true;
+          break;
+        }
+      }
+      if (!wifi_ok) {
+        Serial.println("[Setup] WiFi unreachable on new firmware. Triggering rollback!");
+        ota_manager_rollback();
+      }
+    }
     if (cfg.device_secret.length() > 0) {
       Serial.println("Setup: WiFi connection failed for claimed device");
       retry_count++;
@@ -389,6 +438,10 @@ void setup()
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Setup: WiFi lost after connect, reconnecting...");
     if (!wifi_connect(cfg)) {
+      if (ota_manager_is_pending_verify()) {
+        Serial.println("[Setup] WiFi lost during PENDING_VERIFY and reconnect failed. Triggering rollback!");
+        ota_manager_rollback();
+      }
       if (cfg.device_secret.length() > 0) {
         retry_count++;
         enter_deep_sleep(retry_count <= MAX_RETRY_COUNT ? RETRY_INTERVAL_S * 1000UL : refresh_rate_ms);
@@ -401,6 +454,18 @@ void setup()
 
   // First fetch: login + check-in + display
   bool update_success = initial_fetch_and_display();
+
+  if (!update_success && ota_manager_is_pending_verify()) {
+    Serial.println("[Setup] Verification check-in failed during PENDING_VERIFY! Retrying up to 3 times...");
+    for (uint8_t i = 0; i < 3 && !update_success; i++) {
+      delay(2000);
+      update_success = initial_fetch_and_display();
+    }
+    if (!update_success) {
+      Serial.println("[Setup] Health verification check-in failed 3 times. Triggering rollback!");
+      ota_manager_rollback();
+    }
+  }
 
   // Provisioning runs a blocking loop, so reaching here means we are claimed.
   if (cfg.device_secret.length() > 0) {
@@ -471,6 +536,11 @@ void loop()
 
   if (cr == FetchResult::ERROR) {
     device_token = "";
+    return;
+  }
+
+  if (status.has_ota) {
+    handle_ota_directive(cfg, device_token, status.ota);
     return;
   }
 

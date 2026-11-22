@@ -80,11 +80,25 @@ bool device_login(const DeviceConfig &cfg, String &out_token) {
 
 // ── Check-in ──
 
-FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceStatus &out_status) {
+FetchResult http_check_in(
+  const DeviceConfig &cfg,
+  const String &token,
+  DeviceStatus &out_status,
+  const String &ota_status,
+  const String &ota_error
+) {
   if (!validate_config(cfg)) return FetchResult::ERROR;
 
   // Defaults
-  out_status = { -1, 300, false, false, "", 800, 480 };
+  out_status.screen_id = -1;
+  out_status.refresh_rate = 300;
+  out_status.has_image = false;
+  out_status.content_changed = false;
+  out_status.display_profile = "";
+  out_status.width = 800;
+  out_status.height = 480;
+  out_status.has_ota = false;
+  out_status.ota = {};
 
   String url = cfg.api_url + "/devices/check-in";
   std::unique_ptr<WiFiClient> client(make_client(url));
@@ -95,6 +109,12 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
 
   JsonDocument body_doc;
   body_doc["firmwareVersion"] = FIRMWARE_VERSION;
+  if (ota_status.length() > 0) {
+    body_doc["otaStatus"] = ota_status;
+  }
+  if (ota_error.length() > 0) {
+    body_doc["otaError"] = ota_error;
+  }
   String body;
   serializeJson(body_doc, body);
 
@@ -130,10 +150,27 @@ FetchResult http_check_in(const DeviceConfig &cfg, const String &token, DeviceSt
 
   if (out_status.refresh_rate <= 0) out_status.refresh_rate = 300;
 
-  Serial.printf("[HttpClient] Check-in OK: screenId=%d refreshRate=%d hasImage=%d contentChanged=%d profile=%s (%dx%d)\n",
+  if (doc["ota"].is<JsonObject>()) {
+    JsonObject ota_obj = doc["ota"].as<JsonObject>();
+    out_status.has_ota = true;
+    out_status.ota.version = ota_obj["version"].as<String>();
+    out_status.ota.url = ota_obj["url"].as<String>();
+    out_status.ota.checksum_sha256 = ota_obj["checksumSha256"].as<String>();
+    out_status.ota.size_bytes = ota_obj["sizeBytes"].is<size_t>() ? ota_obj["sizeBytes"].as<size_t>() : 0;
+    Serial.printf("[HttpClient] OTA directive received: v%s, url=%s, sha256=%s, size=%u\n",
+                  out_status.ota.version.c_str(),
+                  out_status.ota.url.c_str(),
+                  out_status.ota.checksum_sha256.c_str(),
+                  (unsigned)out_status.ota.size_bytes);
+  } else {
+    out_status.has_ota = false;
+  }
+
+  Serial.printf("[HttpClient] Check-in OK: screenId=%d refreshRate=%d hasImage=%d contentChanged=%d profile=%s (%dx%d) ota=%d\n",
                 out_status.screen_id, out_status.refresh_rate,
                 out_status.has_image, out_status.content_changed,
-                out_status.display_profile.c_str(), out_status.width, out_status.height);
+                out_status.display_profile.c_str(), out_status.width, out_status.height,
+                out_status.has_ota ? 1 : 0);
   return FetchResult::OK;
 }
 
